@@ -2,6 +2,8 @@ import argparse
 from importlib import import_module
 from pathlib import Path
 
+from iconoscope.models import DEFAULT_EMBEDDING, EMBEDDINGS
+
 
 def size_tuple(size_str: str | int) -> argparse.Namespace:
     try:
@@ -70,8 +72,17 @@ def main():
         help="Limit to specified number of images (arbitrary subset, not sorted)",
     )
 
+    # model arguments
+    model_parser = argparse.ArgumentParser(add_help=False)
+    model_parser.add_argument(
+        "--model",
+        choices=list(EMBEDDINGS),
+        default=DEFAULT_EMBEDDING,
+        help="Embedding model (default: %(default)s)",
+    )
+
     ## embed : extract features from an existing dataset
-    parser_embed = subparsers.add_parser("embed")
+    parser_embed = subparsers.add_parser("embed", parents=[model_parser])
     parser_embed.add_argument(
         "dataset",
         type=Path,
@@ -87,7 +98,7 @@ def main():
     )
 
     ## generate mosaic
-    parser_mosaic = subparsers.add_parser("mosaic")
+    parser_mosaic = subparsers.add_parser("mosaic", parents=[model_parser])
     parser_mosaic.add_argument(
         "dataset",
         type=Path,
@@ -119,7 +130,7 @@ def main():
     )
 
     ## cluster image features
-    cluster_parser = subparsers.add_parser("cluster")
+    cluster_parser = subparsers.add_parser("cluster", parents=[model_parser])
     cluster_parser.add_argument(
         "dataset",
         type=Path,
