@@ -128,6 +128,34 @@ Image labels are exported as file names only, so local paths are not
 published. Thumbnails are embedded in the JSON, so file size grows with the
 number of images (roughly 10–15 KB per image).
 
+## Nearest neighbors notebook
+
+`notebooks/nearest_neighbors.py` is a [marimo](https://marimo.io) notebook for
+comparing embedding models: pick an image and see its nearest neighbors
+(cosine similarity) for every model with embeddings in the dataset.
+
+Run it from the repository root:
+
+```console
+uv run --with marimo --with altair marimo edit notebooks/nearest_neighbors.py
+```
+
+Enter the path to a dataset `.h5` file that has embeddings (from
+`iconoscope embed`). Choose an image by index or click **Random image**, and
+set the number of neighbors and thumbnail height. The notebook shows:
+
+- one row of neighbor thumbnails per model, labeled with rank and similarity
+- UMAP plots centered on the selected image, either combined (neighbors from
+  all models overlaid, colored by model) or as separate plots per model;
+  background points are sampled to keep the chart size manageable
+- a chart of each neighbor's UMAP distance from the selected image by rank
+
+UMAP orientation is arbitrary for each model, so when comparing models in the
+combined plot, only distance from the center is meaningful, not direction.
+
+Note that if a model does not yet have UMAP coordinates, they are calculated
+and saved to the dataset file when the notebook loads it.
+
 ## HDF5 file layout
 
 iconoscope stores image paths, extracted features, and derived data (like UMAP coordinates) in a single HDF5 file, organized per model so multiple embedding models can coexist in the same dataset:
