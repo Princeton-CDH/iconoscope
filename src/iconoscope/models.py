@@ -24,6 +24,12 @@ _models = [
     EmbeddingModel(
         "resnet", "microsoft/resnet-50", 2048, ignore_unexpected=("classifier.",)
     ),
+    EmbeddingModel(
+        "siglip",
+        "google/siglip-base-patch16-224",
+        768,
+        hf_model_class="SiglipVisionModel",
+    ),
     # CLIP vision tower only; the checkpoint also contains the text tower and
     # projection layers, which are unused here.
     #
