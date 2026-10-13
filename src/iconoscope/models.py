@@ -24,8 +24,32 @@ _models = [
     EmbeddingModel(
         "resnet", "microsoft/resnet-50", 2048, ignore_unexpected=("classifier.",)
     ),
+    # CLIP vision tower only; the checkpoint also contains the text tower and
+    # projection layers, which are unused here.
+    #
+    # NOTE: features are the vision tower's 768-dim `pooler_output`, which is
+    # NOT in the shared image-text embedding space. To support text-to-image
+    # search in the future:
+    #   - use hf_model_class="CLIPVisionModelWithProjection", dimensions=512,
+    #     and read `image_embeds` instead of `pooler_output` (would need a
+    #     configurable output attribute on EmbeddingModel; see embed.py)
+    #   - drop "visual_projection." from ignore_unexpected, since it is used
+    #   - embed queries with CLIPTextModelWithProjection + AutoTokenizer
+    #     (`text_embeds`, 512-dim), L2-normalize both image and text
+    #     embeddings, and rank images by dot product (cosine similarity)
+    # Consider registering as a separate model (e.g. "clip-proj") so existing
+    # datasets with 768-dim "clip" features remain valid.
     EmbeddingModel(
-        "clip", "openai/clip-vit-base-patch32", 768, hf_model_class="CLIPVisionModel"
+        "clip",
+        "openai/clip-vit-base-patch32",
+        768,
+        hf_model_class="CLIPVisionModel",
+        ignore_unexpected=(
+            "text_model.",
+            "text_projection.",
+            "visual_projection.",
+            "logit_scale",
+        ),
     ),
 ]
 
