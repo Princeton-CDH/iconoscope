@@ -6,6 +6,7 @@ import numpy as np
 
 from iconoscope.commands import embed
 from iconoscope.dataset import ImageDataset
+from iconoscope.models import DEFAULT_MODEL
 
 
 @patch("iconoscope.commands.embed.extract_img_features")
@@ -18,14 +19,14 @@ def test_embed_existing_model_features_bail_out(
     img_df = img_ds.get_image_data()
     df = img_df.with_columns(features=np.zeros((img_df.height, 4)))
     mock_extract_features.return_value = df
-    embed.main(argparse.Namespace(dataset=h5_file))
+    embed.main(argparse.Namespace(dataset=h5_file, model=DEFAULT_MODEL.name))
     mock_extract_features.assert_called()
     output = capsys.readouterr().out
     assert "Successfully extracted features from 3 images in 0.00s" in output
 
     # when model features are present in dataset, should not call
     mock_extract_features.reset_mock()
-    embed.main(argparse.Namespace(dataset=h5_file))
+    embed.main(argparse.Namespace(dataset=h5_file, model=DEFAULT_MODEL.name))
     mock_extract_features.assert_not_called()
     output = capsys.readouterr().out
     assert "already has features" in output

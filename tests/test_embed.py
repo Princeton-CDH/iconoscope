@@ -5,6 +5,7 @@ import torch
 
 from iconoscope import embed
 from iconoscope.dataset import ImageDataset
+from iconoscope.models import DEFAULT_MODEL
 
 
 def _fake_processor_and_model():
@@ -60,12 +61,14 @@ def test_extract_returns_features(tmp_image_dir: Path):
         patches[2],
         patch.object(embed, "tqdm") as progress,
     ):
-        df = embed.extract_img_features(_persisted_dataset(tmp_image_dir))
+        df = embed.extract_img_features(
+            _persisted_dataset(tmp_image_dir), DEFAULT_MODEL
+        )
 
     progress.assert_called_once_with(desc="Extracting features", total=3)
     assert df.height == 3
     assert df.columns == ["image_path", "features"]
-    assert df["features"].dtype.size == 768
+    assert df["features"].dtype.size == DEFAULT_MODEL.dimensions
 
 
 def test_extract_uses_accelerator_device(tmp_image_dir: Path):
@@ -80,7 +83,7 @@ def test_extract_uses_accelerator_device(tmp_image_dir: Path):
         ),
         patch.object(embed.AutoModel, "from_pretrained", return_value=model),
     ):
-        embed.extract_img_features(_persisted_dataset(tmp_image_dir))
+        embed.extract_img_features(_persisted_dataset(tmp_image_dir), DEFAULT_MODEL)
 
     # model was moved onto the accelerator device
     assert model.device == "meta-device"
@@ -93,7 +96,7 @@ def test_extract_image_paths_match(tmp_image_dir: Path):
 
     patches = _patch_ml(processor, model)
     with patches[0], patches[1], patches[2]:
-        df = embed.extract_img_features(img_dataset)
+        df = embed.extract_img_features(img_dataset, DEFAULT_MODEL)
 
     expected = {path for _img, path in img_dataset}
     assert set(df["image_path"].to_list()) == expected

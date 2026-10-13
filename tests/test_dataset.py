@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 
 from iconoscope.dataset import ImageDataset, find_images
+from iconoscope.models import DEFAULT_MODEL, EmbeddingModel
 
 ## image dataset class
 
@@ -180,7 +181,7 @@ def test_save_features_preserves_existing_data(tmp_path: Path, tmp_image_dir: Pa
                 "features": np.array([[1.0, 0.0], [0.0, 1.0]]),
             }
         ),
-        "dinov2",
+        DEFAULT_MODEL,
     )
     with h5py.File(storage_path, "r+") as h5_file:
         model_group = h5_file["image/models/dinov2"]
@@ -195,7 +196,7 @@ def test_save_features_preserves_existing_data(tmp_path: Path, tmp_image_dir: Pa
                 "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
             }
         ),
-        "clip",
+        EmbeddingModel("clip", "foobar/clip", 73),
     )
 
     with h5py.File(storage_path, "r") as h5_file:
@@ -226,7 +227,7 @@ def test_save_features_rejects_different_image_paths(
                     "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
                 }
             ),
-            "clip",
+            DEFAULT_MODEL,
         )
 
 
@@ -243,7 +244,7 @@ def test_save_features_rejects_mismatched_feature_rows(
                 "features": np.array([[1.0, 0.0], [0.0, 1.0], [0.0, 0.5]]),
             }
         ),
-        "dinov2",
+        DEFAULT_MODEL,
     )
     with pytest.raises(
         ValueError, match="cannot prune image paths when existing models are present"
@@ -256,7 +257,7 @@ def test_save_features_rejects_mismatched_feature_rows(
                     "features": np.array([[2.0, 0.0]]),
                 }
             ),
-            "clip",
+            EmbeddingModel("clip", "foobar/baz", 73),
         )
 
 
@@ -274,7 +275,7 @@ def test_save_features_rm_invalid_paths_on_first_model(
                 "features": np.array([[2.0, 0.0]]),
             }
         ),
-        "clip",
+        DEFAULT_MODEL,
     )
 
     assert dataset.image_count == 1
@@ -293,7 +294,7 @@ def test_save_features_rejects_non_2d_features(tmp_path: Path, tmp_image_dir: Pa
                     "features": [2.0, 3.0],
                 }
             ),
-            "clip",
+            DEFAULT_MODEL,
         )
 
 
@@ -312,7 +313,7 @@ def test_save_features_rejects_unsupported_columns(tmp_path: Path, tmp_image_dir
                     "label": ["a", "b"],
                 }
             ),
-            "clip",
+            DEFAULT_MODEL,
         )
 
 
@@ -329,14 +330,14 @@ def test_save_features_no_overwrite(tmp_path: Path, tmp_image_dir: Path):
         }
     )
 
-    model_name = "dinov2"
-    dataset.save_features(feature_df, model_name)
+    model_name = DEFAULT_MODEL.name
+    dataset.save_features(feature_df, DEFAULT_MODEL)
 
     with pytest.raises(
         ValueError, match=f"Features for '{model_name}' are already present"
     ):
         # rejects on second time
-        dataset.save_features(feature_df, model_name)
+        dataset.save_features(feature_df, DEFAULT_MODEL)
 
 
 def test_has_features(tmp_path: Path, tmp_image_dir: Path):
@@ -351,11 +352,10 @@ def test_has_features(tmp_path: Path, tmp_image_dir: Path):
             "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
         }
     )
-    model_name = "dinov2"
-    assert not dataset.has_features(model_name)
-    dataset.save_features(feature_df, model_name)
-    assert dataset.has_features(model_name)
-    assert not dataset.has_features("clip")
+    assert not dataset.has_features(DEFAULT_MODEL)
+    dataset.save_features(feature_df, DEFAULT_MODEL)
+    assert dataset.has_features(DEFAULT_MODEL)
+    assert not dataset.has_features(EmbeddingModel("clip", "foobar/baz", 72))
 
 
 ## test find images utility method

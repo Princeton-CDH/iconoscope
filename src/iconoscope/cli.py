@@ -2,7 +2,7 @@ import argparse
 from importlib import import_module
 from pathlib import Path
 
-from iconoscope.models import DEFAULT_EMBEDDING, EMBEDDINGS
+from iconoscope.models import AVAILABLE_MODELS, DEFAULT_MODEL
 
 
 def size_tuple(size_str: str | int) -> argparse.Namespace:
@@ -76,8 +76,8 @@ def main():
     model_parser = argparse.ArgumentParser(add_help=False)
     model_parser.add_argument(
         "--model",
-        choices=list(EMBEDDINGS),
-        default=DEFAULT_EMBEDDING,
+        choices=list(AVAILABLE_MODELS),
+        default=DEFAULT_MODEL.name,
         help="Embedding model (default: %(default)s)",
     )
 

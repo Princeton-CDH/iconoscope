@@ -8,11 +8,14 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor, AutoModel
 
 from iconoscope.dataset import ImageDataset
+from iconoscope.models import EmbeddingModel
 
 logger = logging.getLogger(__name__)
 
 
-def extract_img_features(img_dataset: ImageDataset) -> pl.DataFrame:
+def extract_img_features(
+    img_dataset: ImageDataset, model: EmbeddingModel
+) -> pl.DataFrame:
     """ "
     Takes an image dataset and extracts features. Returns  a DataFrame with image_path, features.
     """
@@ -22,8 +25,8 @@ def extract_img_features(img_dataset: ImageDataset) -> pl.DataFrame:
     device = Accelerator().device
     logger.info("Using device %s", device)
 
-    processor = AutoImageProcessor.from_pretrained("facebook/dinov2-base")
-    model = AutoModel.from_pretrained("facebook/dinov2-base").to(device)
+    processor = AutoImageProcessor.from_pretrained(model.id)
+    embed_model = AutoModel.from_pretrained(model.id).to(device)
 
     batch_size = 256
     dataloader = DataLoader(
@@ -35,7 +38,7 @@ def extract_img_features(img_dataset: ImageDataset) -> pl.DataFrame:
     img_feature_df = pl.DataFrame(
         schema={
             "image_path": pl.String,
-            "features": pl.Array(pl.Float32, 768),  # does vector length vary by model?
+            "features": pl.Array(pl.Float32, model.dimensions),
         },
     )
 
@@ -47,7 +50,7 @@ def extract_img_features(img_dataset: ImageDataset) -> pl.DataFrame:
     for images, paths in dataloader:
         inputs = processor(images, return_tensors="pt").to(device)
         with torch.no_grad():
-            outputs = model(**inputs)
+            outputs = embed_model(**inputs)
             results = outputs.pooler_output.cpu()
             img_feature_df.extend(
                 pl.DataFrame(

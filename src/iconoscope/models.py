@@ -3,15 +3,19 @@ from types import MappingProxyType
 
 
 @dataclass(frozen=True)
-class EmbedSpec:
-    hf_id: str
-    dim: int
+class EmbeddingModel:
+    #: shorthand name
+    name: str
+    #: pretained model name, for use with hugging face from_pretained method
+    id: str
+    #: default dimensions for feature vector
+    dimensions: int
     processor_kwargs: MappingProxyType = field(
         default_factory=lambda: MappingProxyType({})
     )
 
 
-EMBEDDINGS: dict[str, EmbedSpec] = {
-    "dinov2": EmbedSpec("facebook/dinov2-base", 768),
-}
-DEFAULT_EMBEDDING = "dinov2"
+_models = [EmbeddingModel("dinov2", "facebook/dinov2-base", 768)]
+
+AVAILABLE_MODELS: dict[str, EmbeddingModel] = {model.name: model for model in _models}
+DEFAULT_MODEL = _models[0]
