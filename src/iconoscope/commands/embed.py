@@ -1,16 +1,13 @@
 import argparse
 import time
 
+from iconoscope.commands import get_model
 from iconoscope.dataset import ImageDataset
 from iconoscope.embed import extract_img_features
-from iconoscope.models import AVAILABLE_MODELS
 
 
 def main(args: argparse.Namespace) -> None:
-    try:
-        model = AVAILABLE_MODELS[args.model]
-    except KeyError:
-        raise SystemExit("Unknown model `%s`", args.model)
+    model = get_model(args.model)
     try:
         img_dataset = ImageDataset(storage_path=args.dataset)
 

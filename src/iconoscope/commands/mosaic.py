@@ -1,17 +1,14 @@
 import argparse
 
+from iconoscope.commands import get_model, require_features
 from iconoscope.dataset import ImageDataset
-from iconoscope.models import AVAILABLE_MODELS
 from iconoscope.mosaic import generate_mosaic
 
 
 def main(args: argparse.Namespace) -> None:
-    try:
-        model = AVAILABLE_MODELS[args.model]
-    except KeyError:
-        raise SystemExit("Unknown model `%s`", args.model)
-
+    model = get_model(args.model)
     img_dataset = ImageDataset(storage_path=args.dataset)
+    require_features(img_dataset, model)
     generate_mosaic(
         img_dataset,
         model,

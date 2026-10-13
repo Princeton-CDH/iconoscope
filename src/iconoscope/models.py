@@ -1,18 +1,14 @@
-from dataclasses import dataclass, field
-from types import MappingProxyType
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class EmbeddingModel:
     #: shorthand name
     name: str
-    #: pretained model name, for use with hugging face from_pretained method
+    #: pretrained model name, for use with hugging face from_pretrained method
     id: str
-    #: default dimensions for feature vector
+    #: dimensions of the model's output feature vector
     dimensions: int
-    processor_kwargs: MappingProxyType = field(
-        default_factory=lambda: MappingProxyType({})
-    )
 
 
 _models = [EmbeddingModel("dinov2", "facebook/dinov2-base", 768)]

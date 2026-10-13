@@ -421,3 +421,12 @@ def test_find_images_extension_case_insensitive(tmp_path: Path):
     Image.new("RGB", (8, 8)).save(tmp_path / "upper.JPG", format="JPEG")
     items = find_images(tmp_path)
     assert len(list(items)) == 1
+
+
+@pytest.mark.parametrize("kwargs", [{"features": True}, {"umap": True}])
+def test_load_data_requires_model(tmp_path: Path, tmp_image_dir: Path, kwargs):
+    dataset = ImageDataset.create(
+        storage_path=tmp_path / "data.h5", image_dir=tmp_image_dir
+    )
+    with pytest.raises(ValueError, match="model is required"):
+        dataset.load_data(**kwargs)

@@ -388,9 +388,10 @@ class ImageDataset(IterableDataset):
                 # return image sizes as well
                 data["image_size"] = img_sizes[:]
 
-            if (
-                features or umap and model is not None
-            ):  # model is required if features/umap requested
+            if features or umap:
+                # model is required if features/umap requested
+                if model is None:
+                    raise ValueError("model is required to load features or umap")
                 # if umap is requested but has not yet been generated, calculate and save
                 model_grp = img_grp[f"models/{model.name}"]
                 feature_path = "features"

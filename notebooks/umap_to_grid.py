@@ -33,6 +33,7 @@ def _():
     from wigglystuff import ObservablePlot
 
     from iconoscope.dataset import ImageDataset
+    from iconoscope.models import DEFAULT_MODEL
     from iconoscope.mosaic import layout_mosaic
 
     # max on-screen size of the plot widget, in CSS pixels
@@ -41,6 +42,7 @@ def _():
     # space above the plot for the summary line and controls
     PLOT_CHROME = 64
     return (
+        DEFAULT_MODEL,
         Image,
         ImageDataset,
         ImageOps,
@@ -87,11 +89,11 @@ def _(mo):
 
 
 @app.cell
-def _(ImageDataset, Path, dataset_path, mo, n_sample, np):
+def _(DEFAULT_MODEL, ImageDataset, Path, dataset_path, mo, n_sample, np):
     _path = Path(dataset_path.value.strip()).expanduser()
     if dataset_path.value.strip():
         mo.stop(not _path.is_file(), mo.md(f"**Dataset not found:** `{_path}`"))
-        _df = ImageDataset(storage_path=_path).load_data(umap=True)
+        _df = ImageDataset(storage_path=_path).load_data(model=DEFAULT_MODEL, umap=True)
         # sample after loading, so umap coords are generated for all images
         # (as in generate_mosaic)
         _df = _df.sample(min(n_sample.value, _df.height))
