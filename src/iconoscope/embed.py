@@ -58,16 +58,22 @@ def extract_img_features(
     device = Accelerator().device
     logger.info("Using device %s", device)
 
+    # get the model class; use AutoModel if not specified
+    model_class = transformers.AutoModel
+    if model.hf_model_class is not None:
+        model_class = getattr(transformers, model.hf_model_class, None)
+        if model_class is None:
+            raise ValueError(
+                f"Unknown transformers model class '{model.hf_model_class}' "
+                f"for model '{model.name}'"
+            )
+
     processor = transformers.AutoImageProcessor.from_pretrained(model.id)
     hf_logger = logging.getLogger("transformers.modeling_utils")
     load_filter = ExpectedUnexpectedKeysFilter(model.ignore_unexpected)
     if model.ignore_unexpected:
         hf_logger.addFilter(load_filter)
     try:
-        # get the model class ; use AutoModel if not specified
-        model_class = transformers.AutoModel
-        if model.hf_model_class is not None:
-            model_class = getattr(transformers, model.hf_model_class)
         embed_model = model_class.from_pretrained(model.id).to(device)
     finally:
         hf_logger.removeFilter(load_filter)
