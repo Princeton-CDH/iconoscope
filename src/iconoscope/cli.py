@@ -93,7 +93,8 @@ def main():
         "--update",
         action="store_true",
         default=False,
-        help="Overwrite features for the specified model even if they already exist",
+        help="Overwrite features for the specified model even if they already exist "
+        "(also removes any umap/cluster results for that model)",
     )
 
     ## dataset info

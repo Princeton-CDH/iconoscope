@@ -340,6 +340,43 @@ def test_save_features_no_overwrite(tmp_path: Path, tmp_image_dir: Path):
         dataset.save_features(feature_df, DEFAULT_MODEL)
 
 
+def test_save_features_overwrite(tmp_path: Path, tmp_image_dir: Path):
+    dataset = ImageDataset.create(
+        image_dir=tmp_image_dir, storage_path=tmp_image_dir / "data.h5", max_images=2
+    )
+    image_paths = [str(p) for p in dataset.get_image_paths()]
+    feature_df = pl.DataFrame(
+        {
+            "image_path": image_paths,
+            "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
+        }
+    )
+    dataset.save_features(feature_df, DEFAULT_MODEL)
+    # add derived results that should be removed on overwrite
+    dataset.save_clusters(np.array([0, 1]), 2, DEFAULT_MODEL)
+
+    new_df = feature_df.with_columns(features=np.array([[5.0, 5.0], [6.0, 6.0]]))
+    dataset.save_features(new_df, DEFAULT_MODEL, overwrite=True)
+
+    saved = dataset.load_data(DEFAULT_MODEL, features=True)
+    assert saved["features"].to_numpy().tolist() == [[5.0, 5.0], [6.0, 6.0]]
+    assert "cluster" not in dataset.info()["models"][DEFAULT_MODEL.name]
+
+
+def test_save_features_unknown_paths(tmp_path: Path, tmp_image_dir: Path):
+    dataset = ImageDataset.create(
+        image_dir=tmp_image_dir, storage_path=tmp_image_dir / "data.h5", max_images=2
+    )
+    feature_df = pl.DataFrame(
+        {
+            "image_path": ["/not/an/image.jpg", "/also/not.jpg"],
+            "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
+        }
+    )
+    with pytest.raises(ValueError, match=r"\(2 unknown paths\)"):
+        dataset.save_features(feature_df, DEFAULT_MODEL)
+
+
 def test_has_features(tmp_path: Path, tmp_image_dir: Path):
     dataset = ImageDataset.create(
         image_dir=tmp_image_dir, storage_path=tmp_image_dir / "data.h5", max_images=2

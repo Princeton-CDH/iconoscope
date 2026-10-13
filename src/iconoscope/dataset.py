@@ -198,6 +198,11 @@ class ImageDataset(IterableDataset):
     ) -> None:
         """Save image features for the specified model; supports updating HDF5 without overwriting
         existing data, e.g. features from other models.
+
+        If features for this model are already present, raises ValueError unless
+        ``overwrite`` is True, in which case the model's entire group is replaced;
+        any derived results stored for the model (e.g. umap, clusters) are removed,
+        since they are no longer valid for the new features.
         """
         expected_columns = {"image_path", "features"}
 
@@ -233,8 +238,8 @@ class ImageDataset(IterableDataset):
                 unknown_img_df = df.join(img_df, on="image_path", how="anti")
                 if unknown_img_df.height:
                     raise ValueError(
-                        "image paths do not match the existing dataset (%d unknown paths)",
-                        unknown_img_df.height,
+                        "image paths do not match the existing dataset "
+                        f"({unknown_img_df.height} unknown paths)"
                     )
                 # check if total does not match
                 if img_df.height != df.height:
@@ -268,19 +273,17 @@ class ImageDataset(IterableDataset):
                             compression="gzip",
                         )
 
-            # Currently does not support overwriting features for a model
-            # that has already been saved to this file.
-            # May add an option to overwrite in future, but for now this is an error.
+            # Features for a model already saved to this file are an error
+            # unless overwrite is requested.
             models_grp = img_grp.get("models")
             if models_grp is not None and model.name in models_grp:
                 if not overwrite:
                     raise ValueError(
                         f"Features for '{model.name}' are already present and overwrite not requested."
                     )
-                else:
-                    # if features are already present and overwrite requested, delete
-                    # must delete the whole group, since any downstream results (umap/cluster) will be invalid
-                    del models_grp[model.name]
+                # delete the whole model group, since any downstream results
+                # (umap/cluster) will be invalid for the new features
+                del models_grp[model.name]
 
             # Save shared metadata and create the new model only after validation.
             # TODO: also save max if specified and extensions if not default
