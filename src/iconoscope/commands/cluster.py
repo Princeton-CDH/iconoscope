@@ -10,5 +10,6 @@ def main(args: argparse.Namespace) -> None:
     img_dataset = ImageDataset(storage_path=args.dataset)
     require_features(img_dataset, model)
     labels = identify_clusters(img_dataset, model, args.n_clusters)
+    # TODO: printing the labels is not very useful... summarize clustering somehow?
     print(labels)
     img_dataset.save_clusters(labels, args.n_clusters, model)
