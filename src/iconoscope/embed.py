@@ -13,6 +13,39 @@ from iconoscope.models import EmbeddingModel
 logger = logging.getLogger(__name__)
 
 
+class ExpectedUnexpectedKeysFilter(logging.Filter):
+    """Suppress the transformers load report when the only problems it
+    lists are UNEXPECTED keys matching known-safe prefixes (e.g. the
+    classifier head of a classification checkpoint). Any other report
+    content (MISSING, MISMATCH, other UNEXPECTED keys) is still logged."""
+
+    def __init__(self, prefixes: tuple[str, ...]):
+        super().__init__()
+        self.prefixes = prefixes
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "LOAD REPORT" not in msg:
+            return True
+        status_rows = [
+            line
+            for line in msg.splitlines()
+            if any(
+                s in line for s in ("UNEXPECTED", "MISSING", "MISMATCH", "CONVERSION")
+            )
+            and "|" in line
+        ]
+        for row in status_rows:
+            if "UNEXPECTED" not in row:
+                return True
+            key = row.split("|", 1)[0].strip()
+            if not key.startswith(self.prefixes):
+                return True
+        # every flagged key is an expected unused key; drop the report
+        logger.debug("Suppressed expected load report: %s", msg)
+        return False
+
+
 def extract_img_features(
     img_dataset: ImageDataset, model: EmbeddingModel
 ) -> pl.DataFrame:
@@ -26,7 +59,14 @@ def extract_img_features(
     logger.info("Using device %s", device)
 
     processor = AutoImageProcessor.from_pretrained(model.id)
-    embed_model = AutoModel.from_pretrained(model.id).to(device)
+    hf_logger = logging.getLogger("transformers.modeling_utils")
+    load_filter = ExpectedUnexpectedKeysFilter(model.ignore_unexpected)
+    if model.ignore_unexpected:
+        hf_logger.addFilter(load_filter)
+    try:
+        embed_model = AutoModel.from_pretrained(model.id).to(device)
+    finally:
+        hf_logger.removeFilter(load_filter)
 
     batch_size = 256
     dataloader = DataLoader(
@@ -51,7 +91,9 @@ def extract_img_features(
         inputs = processor(images, return_tensors="pt").to(device)
         with torch.no_grad():
             outputs = embed_model(**inputs)
-            results = outputs.pooler_output.cpu()
+            # some models (e.g. ResNet) return pooled output as (N, C, 1, 1);
+            # flatten to (N, C) so it matches the expected embedding shape
+            results = outputs.pooler_output.flatten(start_dim=1).cpu()
             img_feature_df.extend(
                 pl.DataFrame(
                     data={
