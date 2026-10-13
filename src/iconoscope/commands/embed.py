@@ -11,8 +11,10 @@ def main(args: argparse.Namespace) -> None:
     try:
         img_dataset = ImageDataset(storage_path=args.dataset)
 
-        if img_dataset.has_features(model):
-            print(f"Dataset already has features for `{model.name}`")
+        if img_dataset.has_features(model) and not args.update:
+            print(
+                f"Dataset already has features for `{model.name}`; specify --update to regenerate"
+            )
             return
 
         start_time = time.perf_counter()
@@ -21,6 +23,6 @@ def main(args: argparse.Namespace) -> None:
         print(
             f"Successfully extracted features from {img_feature_df.height:,} images in {duration:.2f}s"
         )
-        img_dataset.save_features(img_feature_df, model)
+        img_dataset.save_features(img_feature_df, model, overwrite=args.update)
     except ValueError as err:
         raise SystemExit(err)

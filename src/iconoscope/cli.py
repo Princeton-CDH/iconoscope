@@ -88,6 +88,13 @@ def main():
         type=Path,
         help="Image dataset file created by iconoscope create (.hdf5)",
     )
+    parser_embed.add_argument(
+        "-u",
+        "--update",
+        action="store_true",
+        default=False,
+        help="Overwrite features for the specified model even if they already exist",
+    )
 
     ## dataset info
     info_parser = subparsers.add_parser("info")

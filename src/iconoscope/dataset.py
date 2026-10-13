@@ -193,7 +193,9 @@ class ImageDataset(IterableDataset):
 
     ## storage functionality
 
-    def save_features(self, df: pl.DataFrame, model: EmbeddingModel) -> None:
+    def save_features(
+        self, df: pl.DataFrame, model: EmbeddingModel, overwrite: bool = False
+    ) -> None:
         """Save image features for the specified model; supports updating HDF5 without overwriting
         existing data, e.g. features from other models.
         """
@@ -271,9 +273,14 @@ class ImageDataset(IterableDataset):
             # May add an option to overwrite in future, but for now this is an error.
             models_grp = img_grp.get("models")
             if models_grp is not None and model.name in models_grp:
-                raise ValueError(
-                    f"Features for '{model.name}' are already present, overwrite is not yet supported."
-                )
+                if not overwrite:
+                    raise ValueError(
+                        f"Features for '{model.name}' are already present and overwrite not requested."
+                    )
+                else:
+                    # if features are already present and overwrite requested, delete
+                    # must delete the whole group, since any downstream results (umap/cluster) will be invalid
+                    del models_grp[model.name]
 
             # Save shared metadata and create the new model only after validation.
             # TODO: also save max if specified and extensions if not default
@@ -294,8 +301,6 @@ class ImageDataset(IterableDataset):
             model_grp = models_grp.create_group(model.name)
             # save extracted features as a dataset
             model_grp.create_dataset("features", data=features, compression="gzip")
-            # img_grp.attrs["last_modified"] = datetime.now().isoformat()  # needed/useful?
-            #
 
     def has_features(self, model: EmbeddingModel) -> bool:
         if self.storage_path.exists():
