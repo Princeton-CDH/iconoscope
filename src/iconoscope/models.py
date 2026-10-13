@@ -14,6 +14,7 @@ class EmbeddingModel:
 _models = [
     EmbeddingModel("dinov2", "facebook/dinov2-base", 768),
     EmbeddingModel("dinov3", "facebook/dinov3-vitb16-pretrain-lvd1689m", 768),
+    EmbeddingModel("resnet", "microsoft/resnet-50", 2048),
 ]
 
 AVAILABLE_MODELS: dict[str, EmbeddingModel] = {model.name: model for model in _models}
