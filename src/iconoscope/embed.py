@@ -2,10 +2,10 @@ import logging
 
 import polars as pl
 import torch
+import transformers
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import AutoImageProcessor, AutoModel
 
 from iconoscope.dataset import ImageDataset
 from iconoscope.models import EmbeddingModel
@@ -58,13 +58,17 @@ def extract_img_features(
     device = Accelerator().device
     logger.info("Using device %s", device)
 
-    processor = AutoImageProcessor.from_pretrained(model.id)
+    processor = transformers.AutoImageProcessor.from_pretrained(model.id)
     hf_logger = logging.getLogger("transformers.modeling_utils")
     load_filter = ExpectedUnexpectedKeysFilter(model.ignore_unexpected)
     if model.ignore_unexpected:
         hf_logger.addFilter(load_filter)
     try:
-        embed_model = AutoModel.from_pretrained(model.id).to(device)
+        # get the model class ; use AutoModel if not specified
+        model_class = transformers.AutoModel
+        if model.hf_model_class is not None:
+            model_class = getattr(transformers, model.hf_model_class)
+        embed_model = model_class.from_pretrained(model.id).to(device)
     finally:
         hf_logger.removeFilter(load_filter)
 

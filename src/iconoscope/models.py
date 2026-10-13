@@ -13,6 +13,8 @@ class EmbeddingModel:
     #: the base model (e.g. classification heads); load warnings that
     #: *only* concern these keys are suppressed
     ignore_unexpected: tuple[str, ...] = ()
+    #: optional transformers model class to use, for models that require something other than AutoModel
+    hf_model_class: str | None = None
 
 
 _models = [
@@ -21,6 +23,9 @@ _models = [
     # checkpoint is for image classification; we only use the base model
     EmbeddingModel(
         "resnet", "microsoft/resnet-50", 2048, ignore_unexpected=("classifier.",)
+    ),
+    EmbeddingModel(
+        "clip", "openai/clip-vit-base-patch32", 768, hf_model_class="CLIPVisionModel"
     ),
 ]
 
