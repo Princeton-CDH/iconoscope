@@ -11,7 +11,10 @@ class EmbeddingModel:
     dimensions: int
 
 
-_models = [EmbeddingModel("dinov2", "facebook/dinov2-base", 768)]
+_models = [
+    EmbeddingModel("dinov2", "facebook/dinov2-base", 768),
+    EmbeddingModel("dinov3", "facebook/dinov3-vitb16-pretrain-lvd1689m", 768),
+]
 
 AVAILABLE_MODELS: dict[str, EmbeddingModel] = {model.name: model for model in _models}
 DEFAULT_MODEL = _models[0]
