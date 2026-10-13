@@ -4,6 +4,8 @@
 #     "marimo",
 #     "wigglystuff",
 #     "iconoscope",
+#     "numpy==2.5.4",
+#     "pillow==12.3.0",
 # ]
 #
 # [tool.uv.sources]
