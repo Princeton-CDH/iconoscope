@@ -12,6 +12,9 @@ def main(args: argparse.Namespace) -> None:
     details = img_dataset.info()
     info_details = [f"Details for {args.dataset} :"]
 
+    if "schema" in details:
+        info_details.append(f"  schema: {details['schema']}")
+
     if "image_paths" in details:
         whence = f" from {details['image_dir']}" if details.get("image_dir") else ""
         info_details.append(f"  {details['image_paths']:,} image paths{whence}")

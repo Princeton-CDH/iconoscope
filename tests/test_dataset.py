@@ -184,9 +184,11 @@ def test_save_features_preserves_existing_data(tmp_path: Path, tmp_image_dir: Pa
         DEFAULT_MODEL,
     )
     with h5py.File(storage_path, "r+") as h5_file:
-        model_group = h5_file["image/models/dinov2"]
-        model_group.create_dataset("umap", data=[[0.1, 0.2], [0.3, 0.4]])
-        cluster = model_group.create_dataset("cluster", data=[0, 1])
+        model_group = h5_file[dataset.schema.model_group("dinov2", absolute=True)]
+        model_group.create_dataset(
+            dataset.schema.umap_ds, data=[[0.1, 0.2], [0.3, 0.4]]
+        )
+        cluster = model_group.create_dataset(dataset.schema.cluster_ds, data=[0, 1])
         cluster.attrs["n_clusters"] = 2
 
     dataset.save_features(
@@ -201,16 +203,17 @@ def test_save_features_preserves_existing_data(tmp_path: Path, tmp_image_dir: Pa
 
     with h5py.File(storage_path, "r") as h5_file:
         assert set(h5_file["image/models"]) == {"dinov2", "clip"}
-        assert h5_file["image/models/dinov2/features"][:].tolist() == [
+        dinov2_model_grp = h5_file[dataset.schema.model_group("dinov2", absolute=True)]
+        assert dinov2_model_grp[dataset.schema.features_ds][:].tolist() == [
             [1.0, 0.0],
             [0.0, 1.0],
         ]
-        assert h5_file["image/models/dinov2/umap"][:].tolist() == [
+        assert dinov2_model_grp[dataset.schema.umap_ds][:].tolist() == [
             [0.1, 0.2],
             [0.3, 0.4],
         ]
-        assert h5_file["image/models/dinov2/cluster"][:].tolist() == [0, 1]
-        assert h5_file["image/models/dinov2/cluster"].attrs["n_clusters"] == 2
+        assert dinov2_model_grp[dataset.schema.cluster_ds][:].tolist() == [0, 1]
+        assert dinov2_model_grp[dataset.schema.cluster_ds].attrs["n_clusters"] == 2
 
 
 def test_save_features_rejects_different_image_paths(
