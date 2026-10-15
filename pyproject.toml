@@ -41,6 +41,7 @@ iconoscope = "iconoscope.cli:main"
 
 [dependency-groups]
 dev = [
+    "marimo>=0.25.1",
     "pytest>=8.0",
     "pytest-cov>=7.1.0",
 ]
@@ -48,3 +49,7 @@ dev = [
 [build-system]
 requires = ["uv_build>=0.11.16,<0.12.0"]
 build-backend = "uv_build"
+
+
+[tool.marimo.runtime]
+pythonpath = ["src"]
