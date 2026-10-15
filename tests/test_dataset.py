@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 
 from iconoscope.dataset import ImageDataset, find_images
+from iconoscope.models import DEFAULT_MODEL, EmbeddingModel
 
 ## image dataset class
 
@@ -180,7 +181,7 @@ def test_save_features_preserves_existing_data(tmp_path: Path, tmp_image_dir: Pa
                 "features": np.array([[1.0, 0.0], [0.0, 1.0]]),
             }
         ),
-        "dinov2",
+        DEFAULT_MODEL,
     )
     with h5py.File(storage_path, "r+") as h5_file:
         model_group = h5_file["image/models/dinov2"]
@@ -195,7 +196,7 @@ def test_save_features_preserves_existing_data(tmp_path: Path, tmp_image_dir: Pa
                 "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
             }
         ),
-        "clip",
+        EmbeddingModel("clip", "foobar/clip", 73),
     )
 
     with h5py.File(storage_path, "r") as h5_file:
@@ -226,7 +227,7 @@ def test_save_features_rejects_different_image_paths(
                     "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
                 }
             ),
-            "clip",
+            DEFAULT_MODEL,
         )
 
 
@@ -243,7 +244,7 @@ def test_save_features_rejects_mismatched_feature_rows(
                 "features": np.array([[1.0, 0.0], [0.0, 1.0], [0.0, 0.5]]),
             }
         ),
-        "dinov2",
+        DEFAULT_MODEL,
     )
     with pytest.raises(
         ValueError, match="cannot prune image paths when existing models are present"
@@ -256,7 +257,7 @@ def test_save_features_rejects_mismatched_feature_rows(
                     "features": np.array([[2.0, 0.0]]),
                 }
             ),
-            "clip",
+            EmbeddingModel("clip", "foobar/baz", 73),
         )
 
 
@@ -274,7 +275,7 @@ def test_save_features_rm_invalid_paths_on_first_model(
                 "features": np.array([[2.0, 0.0]]),
             }
         ),
-        "clip",
+        DEFAULT_MODEL,
     )
 
     assert dataset.image_count == 1
@@ -293,7 +294,7 @@ def test_save_features_rejects_non_2d_features(tmp_path: Path, tmp_image_dir: Pa
                     "features": [2.0, 3.0],
                 }
             ),
-            "clip",
+            DEFAULT_MODEL,
         )
 
 
@@ -312,7 +313,7 @@ def test_save_features_rejects_unsupported_columns(tmp_path: Path, tmp_image_dir
                     "label": ["a", "b"],
                 }
             ),
-            "clip",
+            DEFAULT_MODEL,
         )
 
 
@@ -329,14 +330,51 @@ def test_save_features_no_overwrite(tmp_path: Path, tmp_image_dir: Path):
         }
     )
 
-    model_name = "dinov2"
-    dataset.save_features(feature_df, model_name)
+    model_name = DEFAULT_MODEL.name
+    dataset.save_features(feature_df, DEFAULT_MODEL)
 
     with pytest.raises(
         ValueError, match=f"Features for '{model_name}' are already present"
     ):
         # rejects on second time
-        dataset.save_features(feature_df, model_name)
+        dataset.save_features(feature_df, DEFAULT_MODEL)
+
+
+def test_save_features_overwrite(tmp_path: Path, tmp_image_dir: Path):
+    dataset = ImageDataset.create(
+        image_dir=tmp_image_dir, storage_path=tmp_image_dir / "data.h5", max_images=2
+    )
+    image_paths = [str(p) for p in dataset.get_image_paths()]
+    feature_df = pl.DataFrame(
+        {
+            "image_path": image_paths,
+            "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
+        }
+    )
+    dataset.save_features(feature_df, DEFAULT_MODEL)
+    # add derived results that should be removed on overwrite
+    dataset.save_clusters(np.array([0, 1]), 2, DEFAULT_MODEL)
+
+    new_df = feature_df.with_columns(features=np.array([[5.0, 5.0], [6.0, 6.0]]))
+    dataset.save_features(new_df, DEFAULT_MODEL, overwrite=True)
+
+    saved = dataset.load_data(DEFAULT_MODEL, features=True)
+    assert saved["features"].to_numpy().tolist() == [[5.0, 5.0], [6.0, 6.0]]
+    assert "cluster" not in dataset.info()["models"][DEFAULT_MODEL.name]
+
+
+def test_save_features_unknown_paths(tmp_path: Path, tmp_image_dir: Path):
+    dataset = ImageDataset.create(
+        image_dir=tmp_image_dir, storage_path=tmp_image_dir / "data.h5", max_images=2
+    )
+    feature_df = pl.DataFrame(
+        {
+            "image_path": ["/not/an/image.jpg", "/also/not.jpg"],
+            "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
+        }
+    )
+    with pytest.raises(ValueError, match=r"\(2 unknown paths\)"):
+        dataset.save_features(feature_df, DEFAULT_MODEL)
 
 
 def test_has_features(tmp_path: Path, tmp_image_dir: Path):
@@ -351,11 +389,10 @@ def test_has_features(tmp_path: Path, tmp_image_dir: Path):
             "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
         }
     )
-    model_name = "dinov2"
-    assert not dataset.has_features(model_name)
-    dataset.save_features(feature_df, model_name)
-    assert dataset.has_features(model_name)
-    assert not dataset.has_features("clip")
+    assert not dataset.has_features(DEFAULT_MODEL)
+    dataset.save_features(feature_df, DEFAULT_MODEL)
+    assert dataset.has_features(DEFAULT_MODEL)
+    assert not dataset.has_features(EmbeddingModel("clip", "foobar/baz", 72))
 
 
 ## test find images utility method
@@ -421,3 +458,12 @@ def test_find_images_extension_case_insensitive(tmp_path: Path):
     Image.new("RGB", (8, 8)).save(tmp_path / "upper.JPG", format="JPEG")
     items = find_images(tmp_path)
     assert len(list(items)) == 1
+
+
+@pytest.mark.parametrize("kwargs", [{"features": True}, {"umap": True}])
+def test_load_data_requires_model(tmp_path: Path, tmp_image_dir: Path, kwargs):
+    dataset = ImageDataset.create(
+        storage_path=tmp_path / "data.h5", image_dir=tmp_image_dir
+    )
+    with pytest.raises(ValueError, match="model is required"):
+        dataset.load_data(**kwargs)

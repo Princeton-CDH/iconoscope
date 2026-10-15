@@ -11,6 +11,7 @@ from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
 
 from iconoscope.dataset import ImageDataset
+from iconoscope.models import EmbeddingModel
 
 LAPJV_CELL_LIMIT = 5000
 
@@ -232,6 +233,7 @@ def load_thumbnail(path: str | Path, size: tuple[int, int]) -> Image.Image:
 
 def generate_mosaic(
     img_dataset: ImageDataset,
+    model: EmbeddingModel,
     output: Path | None = None,
     width: int = 2000,
     height: int = 2000,
@@ -247,8 +249,8 @@ def generate_mosaic(
     if output is None:
         output = img_dataset.storage_path.with_suffix(".jpg")
 
-    # load image embeddings from hdf5 file
-    df = img_dataset.load_data(umap=True)
+    # load image embeddings from hdf5 file for specified model
+    df = img_dataset.load_data(model=model, umap=True)
 
     # if a sample is requested, select a random sample of the specified size
     # (subset after UMAP coords are generated, since they should be done for all images)

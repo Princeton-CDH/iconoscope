@@ -1,10 +1,12 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 
 from iconoscope import embed
 from iconoscope.dataset import ImageDataset
+from iconoscope.models import DEFAULT_MODEL, EmbeddingModel
 
 
 def _fake_processor_and_model():
@@ -40,9 +42,13 @@ def _patch_ml(processor, model):
     return (
         patch.object(embed, "Accelerator", accelerator),
         patch.object(
-            embed.AutoImageProcessor, "from_pretrained", return_value=processor
+            embed.transformers.AutoImageProcessor,
+            "from_pretrained",
+            return_value=processor,
         ),
-        patch.object(embed.AutoModel, "from_pretrained", return_value=model),
+        patch.object(
+            embed.transformers.AutoModel, "from_pretrained", return_value=model
+        ),
     )
 
 
@@ -60,12 +66,14 @@ def test_extract_returns_features(tmp_image_dir: Path):
         patches[2],
         patch.object(embed, "tqdm") as progress,
     ):
-        df = embed.extract_img_features(_persisted_dataset(tmp_image_dir))
+        df = embed.extract_img_features(
+            _persisted_dataset(tmp_image_dir), DEFAULT_MODEL
+        )
 
     progress.assert_called_once_with(desc="Extracting features", total=3)
     assert df.height == 3
     assert df.columns == ["image_path", "features"]
-    assert df["features"].dtype.size == 768
+    assert df["features"].dtype.size == DEFAULT_MODEL.dimensions
 
 
 def test_extract_uses_accelerator_device(tmp_image_dir: Path):
@@ -76,11 +84,15 @@ def test_extract_uses_accelerator_device(tmp_image_dir: Path):
     with (
         patch.object(embed, "Accelerator", accelerator),
         patch.object(
-            embed.AutoImageProcessor, "from_pretrained", return_value=processor
+            embed.transformers.AutoImageProcessor,
+            "from_pretrained",
+            return_value=processor,
         ),
-        patch.object(embed.AutoModel, "from_pretrained", return_value=model),
+        patch.object(
+            embed.transformers.AutoModel, "from_pretrained", return_value=model
+        ),
     ):
-        embed.extract_img_features(_persisted_dataset(tmp_image_dir))
+        embed.extract_img_features(_persisted_dataset(tmp_image_dir), DEFAULT_MODEL)
 
     # model was moved onto the accelerator device
     assert model.device == "meta-device"
@@ -93,7 +105,33 @@ def test_extract_image_paths_match(tmp_image_dir: Path):
 
     patches = _patch_ml(processor, model)
     with patches[0], patches[1], patches[2]:
-        df = embed.extract_img_features(img_dataset)
+        df = embed.extract_img_features(img_dataset, DEFAULT_MODEL)
 
     expected = {path for _img, path in img_dataset}
     assert set(df["image_path"].to_list()) == expected
+
+
+def test_extract_uses_hf_model_class(tmp_image_dir: Path):
+    processor, model = _fake_processor_and_model()
+    custom_model = EmbeddingModel(
+        "clip", "openai/clip-vit-base-patch32", 768, hf_model_class="CLIPVisionModel"
+    )
+    patches = _patch_ml(processor, model)
+    with (
+        patches[0],
+        patches[1],
+        patches[2] as auto_load,
+        patch.object(
+            embed.transformers.CLIPVisionModel, "from_pretrained", return_value=model
+        ) as clip_load,
+    ):
+        embed.extract_img_features(_persisted_dataset(tmp_image_dir), custom_model)
+
+    clip_load.assert_called_once_with(custom_model.id)
+    auto_load.assert_not_called()
+
+
+def test_extract_unknown_hf_model_class(tmp_image_dir: Path):
+    bad_model = EmbeddingModel("bad", "foo/bar", 768, hf_model_class="NoSuchModel")
+    with pytest.raises(ValueError, match="Unknown transformers model class"):
+        embed.extract_img_features(_persisted_dataset(tmp_image_dir), bad_model)
