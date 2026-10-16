@@ -277,7 +277,9 @@ def _(mo):
     thumb_size = mo.ui.slider(
         60, 250, value=120, step=10, label="Thumbnail height", show_value=True
     )
-    return k_slider, random_button, thumb_size
+    show_captions = mo.ui.checkbox(value=True, label="Show rank · similarity")
+
+    return k_slider, random_button, show_captions, thumb_size
 
 
 @app.cell
@@ -292,12 +294,22 @@ def _(image_df, mo, random, random_button):
 
 
 @app.cell
-def _(image_df, image_index, k_slider, mo, random_button, thumb_size):
+def _(
+    image_df,
+    image_index,
+    k_slider,
+    mo,
+    random_button,
+    show_captions,
+    thumb_size,
+):
     query_idx = int(image_index.value)
     query_path = image_df["image_path"][query_idx]
     mo.hstack(
         [
-            mo.vstack([image_index, random_button, k_slider, thumb_size]),
+            mo.vstack(
+                [image_index, random_button, k_slider, thumb_size, show_captions]
+            ),
             mo.vstack(
                 [
                     # fixed height, auto width -> preserve aspect ratio
@@ -337,42 +349,64 @@ def _(image_df, k_slider, model_data, np, pl, query_idx, selected_models):
 
 
 @app.cell
-def _(mo, neighbors, thumb_size):
-    def _thumb(row):
-        return mo.vstack(
-            [
-                mo.image(
-                    row["image_path"],
-                    style={
-                        "height": f"{thumb_size.value}px",
-                        "width": "auto",
-                        "object-fit": "contain",
-                    },
-                ),
-                mo.Html(
-                    f"<span style='font-size: 0.7rem; color: #666'>"
-                    f"#{row['rank']} · {row['similarity']:.3f}</span>"
-                ),
-            ],
-            gap=0.1,
-            align="center",
+def _(mo, models, neighbors, show_captions, thumb_size):
+    # compact grid: one row per model config, label on the left, neighbors
+    # packed tightly; rank + similarity overlaid on each thumbnail
+    def _label(name):
+        _config = models[name]
+        _opts = [
+            _opt
+            if _val is True
+            else f"{_opt}={_val:g}"
+            if isinstance(_val, float)
+            else f"{_opt}={_val}"
+            for _opt, _val in _config.opts.items()
+            if _val is not None and _val is not False
+        ]
+        return f"<div class='nn-model'>{_config.model.name}</div>" + "".join(
+            f"<div class='nn-opt'>{_o}</div>" for _o in _opts
         )
 
-    mo.vstack(
-        [
-            mo.vstack(
-                [
-                    mo.md(f"### {_name}"),
-                    mo.hstack(
-                        [_thumb(r) for r in _df.iter_rows(named=True)],
-                        justify="start",
-                        wrap=False,
-                        gap=0.5,
-                    ).style({"overflow-x": "auto"}),
-                ]
+    def _thumb(row):
+        _img = mo.image(
+            row["image_path"],
+            style={
+                "height": f"{thumb_size.value}px",
+                "width": "auto",
+                "display": "block",
+            },
+        ).text
+        return (
+            f"<div class='nn-thumb' title='{row['image_path']}'>{_img}"
+            + (
+                f"<span class='nn-cap'>#{row['rank']} · {row['similarity']:.3f}</span>"
+                if show_captions.value
+                else ""
             )
-            for _name, _df in neighbors.items()
-        ]
+            + "</div>"
+        )
+
+    _rows = "".join(
+        f"<div class='nn-label'>{_label(_name)}</div>"
+        f"<div class='nn-imgs'>{''.join(_thumb(r) for r in _df.iter_rows(named=True))}</div>"
+        for _name, _df in neighbors.items()
+    )
+    mo.Html(
+        f"""
+        <style>
+          .nn-grid {{ display: grid; grid-template-columns: max-content 1fr;
+            column-gap: 0.5rem; row-gap: 4px; align-items: center; }}
+          .nn-label {{ text-align: right; font-size: 0.8rem; line-height: 1.2; }}
+          .nn-model {{ font-weight: 600; }}
+          .nn-opt {{ font-size: 0.7rem; opacity: 0.7; }}
+          .nn-imgs {{ display: flex; gap: 2px; overflow-x: auto; }}
+          .nn-thumb {{ position: relative; flex: none; }}
+          .nn-thumb img {{ margin: 0; }}
+          .nn-cap {{ position: absolute; left: 0; bottom: 0; padding: 0 3px;
+            font-size: 0.6rem; color: white; background: rgba(0, 0, 0, 0.55); }}
+        </style>
+        <div class="nn-grid">{_rows}</div>
+        """
     )
     return
 
