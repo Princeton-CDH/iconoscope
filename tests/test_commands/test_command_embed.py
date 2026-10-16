@@ -9,6 +9,12 @@ from iconoscope.dataset import ImageDataset
 from iconoscope.models import DEFAULT_MODEL
 
 
+def embed_args(dataset: Path, update: bool, **opts) -> argparse.Namespace:
+    # mirror the args provided by the CLI parser
+    defaults = {"model": DEFAULT_MODEL.name, "center_crop": None, "grayscale": False}
+    return argparse.Namespace(dataset=dataset, update=update, **(defaults | opts))
+
+
 @patch("iconoscope.commands.embed.extract_img_features")
 def test_embed_existing_model_features_bail_out(
     mock_extract_features, tmp_path: Path, tmp_image_dir: Path, capsys
@@ -19,18 +25,14 @@ def test_embed_existing_model_features_bail_out(
     img_df = img_ds.get_image_data()
     df = img_df.with_columns(features=np.zeros((img_df.height, 4)))
     mock_extract_features.return_value = df
-    embed.main(
-        argparse.Namespace(dataset=h5_file, model=DEFAULT_MODEL.name, update=False)
-    )
+    embed.main(embed_args(h5_file, update=False))
     mock_extract_features.assert_called()
     output = capsys.readouterr().out
     assert "Successfully extracted features from 3 images in 0.00s" in output
 
     # when model features are present in dataset, should not call
     mock_extract_features.reset_mock()
-    embed.main(
-        argparse.Namespace(dataset=h5_file, model=DEFAULT_MODEL.name, update=False)
-    )
+    embed.main(embed_args(h5_file, update=False))
     mock_extract_features.assert_not_called()
     output = capsys.readouterr().out
     assert "already has features" in output
@@ -39,9 +41,7 @@ def test_embed_existing_model_features_bail_out(
     # with update requested, features are regenerated and overwritten
     df = img_df.with_columns(features=np.ones((img_df.height, 4)))
     mock_extract_features.return_value = df
-    embed.main(
-        argparse.Namespace(dataset=h5_file, model=DEFAULT_MODEL.name, update=True)
-    )
+    embed.main(embed_args(h5_file, update=True))
     mock_extract_features.assert_called()
     output = capsys.readouterr().out
     assert "Successfully extracted features" in output

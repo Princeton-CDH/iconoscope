@@ -39,26 +39,20 @@ class EmbeddingConfig:
 
     @cached_property
     def key(self) -> str:
-        model_opts = "defaults"
         opt_labels = []
         for key, value in self.opts.items():
-            # if property is unset, omit from key
-            if value is None:
+            # if property is unset or False, omit from key
+            if value is None or value is False:
                 continue
-            # if property is boolean, include property name when True; omit if False
-            if isinstance(value, bool) and value:
+            # if property is boolean True, include property name only
+            if value is True:
                 opt_labels.append(key)
             # otherwise, include both key and value
             else:
                 opt_labels.append(f"{key}={value}")
-            model_opts = "|".join(opt_labels)
-
-        # if any options are set, return as label
-        if opt_labels:
-            model_opts = "_".join(opt_labels)
 
         # if no customization, return "defaults"
-        return model_opts
+        return "_".join(opt_labels) or "defaults"
 
 
 _models = [
