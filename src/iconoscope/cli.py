@@ -34,6 +34,16 @@ def new_file(value: str) -> Path:
     return path
 
 
+def percentage(value: str) -> float:
+    try:
+        percent = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Could not convert `{value}` to percentage")
+    if percent > 100.0 or percent < 0.0:
+        raise argparse.ArgumentTypeError(f"{value} must be between 0 and 100")
+    return percent
+
+
 HANDLERS = {
     "create": ("iconoscope.commands.create", "main"),
     "embed": ("iconoscope.commands.embed", "main"),
@@ -79,6 +89,18 @@ def main():
         choices=list(AVAILABLE_MODELS),
         default=DEFAULT_MODEL.name,
         help="Embedding model (default: %(default)s)",
+    )
+    model_parser.add_argument(
+        "--center-crop",
+        type=percentage,
+        metavar="CROP",
+        help="Custom image center crop before embedding (percentage of image to retain as a value from 1 to 100; e.g., 60 to use central 60%% of image)",
+    )
+    model_parser.add_argument(
+        "--grayscale",
+        action="store_true",
+        default=False,
+        help="Convert images to grayscale before generate embeddings",
     )
 
     ## embed : extract features from an existing dataset

@@ -239,6 +239,7 @@ def generate_mosaic(
     height: int = 2000,
     jpeg_quality: int = 90,
     sample_size: int | None = None,
+    **preprocess_opts,
 ) -> None:
     """Generate a mosaic of images based on previously calculated image embeddings (feature vectors).
     Load image feature vectors from the specified image dataset file, get or generate 2D coordinates
@@ -250,7 +251,7 @@ def generate_mosaic(
         output = img_dataset.storage_path.with_suffix(".jpg")
 
     # load image embeddings from hdf5 file for specified model
-    df = img_dataset.load_data(model=model, umap=True)
+    df = img_dataset.load_data(model=model, umap=True, **preprocess_opts)
 
     # if a sample is requested, select a random sample of the specified size
     # (subset after UMAP coords are generated, since they should be done for all images)

@@ -363,7 +363,11 @@ def test_save_features_overwrite(tmp_path: Path, tmp_image_dir: Path):
 
     saved = dataset.load_data(DEFAULT_MODEL, features=True)
     assert saved["features"].to_numpy().tolist() == [[5.0, 5.0], [6.0, 6.0]]
-    assert "cluster" not in dataset.info()["models"][DEFAULT_MODEL.name]
+    assert (
+        "cluster"
+        # currently reporting as named in h5, i.e. model/opts
+        not in dataset.info()["models"][dataset.schema.model_group(DEFAULT_MODEL.name)]
+    )
 
 
 def test_save_features_unknown_paths(tmp_path: Path, tmp_image_dir: Path):

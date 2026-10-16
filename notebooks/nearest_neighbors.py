@@ -35,12 +35,10 @@ def _():
     import polars as pl
 
     from iconoscope.dataset import ImageDataset
-    from iconoscope.models import AVAILABLE_MODELS
 
     # background points are sampled/capped in the plotting cell
     alt.data_transformers.disable_max_rows()
-
-    return AVAILABLE_MODELS, ImageDataset, Path, alt, mo, np, pl, random
+    return ImageDataset, Path, alt, mo, np, pl, random
 
 
 @app.cell
@@ -65,7 +63,7 @@ def _(mo):
 
 
 @app.cell
-def _(AVAILABLE_MODELS, ImageDataset, Path, dataset_path, mo):
+def _(ImageDataset, Path, dataset_path, mo):
     _path = Path(dataset_path.value.strip()).expanduser()
     mo.stop(
         not dataset_path.value.strip() or not _path.is_file(),
@@ -76,9 +74,9 @@ def _(AVAILABLE_MODELS, ImageDataset, Path, dataset_path, mo):
     info = dataset.info()
     # only models that have stored features
     models = [
-        AVAILABLE_MODELS[name]
+        name  # AVAILABLE_MODELS[name]
         for name, data in info["models"].items()
-        if "embeddings" in data and name in AVAILABLE_MODELS
+        if "embeddings" in data  # and name in AVAILABLE_MODELS
     ]
     mo.stop(
         not models,
@@ -88,7 +86,8 @@ def _(AVAILABLE_MODELS, ImageDataset, Path, dataset_path, mo):
     )
     mo.md(
         f"**{info['image_paths']:,}** images from `{info['image_dir']}`; "
-        f"models: {', '.join(f'`{m.name}`' for m in models)}"
+        # f"models: {', '.join(f'`{m.name}`' for m in models)}"
+        f"models: {', '.join(f'`{m}`' for m in models)}"
     )
     return dataset, models
 

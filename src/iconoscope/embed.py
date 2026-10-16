@@ -5,6 +5,7 @@ import torch
 import transformers
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
+from torchvision.transforms import v2
 from tqdm import tqdm
 
 from iconoscope.dataset import ImageDataset
@@ -46,11 +47,20 @@ class ExpectedUnexpectedKeysFilter(logging.Filter):
         return False
 
 
+def center_crop_pct(img, pct):
+    img_height, img_width = v2.functional.get_size(img)
+    return v2.functional.center_crop(
+        img, [round(img_height * pct), round(img_width * pct)]
+    )
+
+
 def extract_img_features(
-    img_dataset: ImageDataset, model: EmbeddingModel
+    img_dataset: ImageDataset, model: EmbeddingModel, center_crop=None, grayscale=False
 ) -> pl.DataFrame:
-    """ "
-    Takes an image dataset and extracts features. Returns  a DataFrame with image_path, features.
+    """
+    Takes an image dataset and extracts features using the specified model. Returns a DataFrame with image_path, features.
+
+    If center crop is specified, customizes image preprocessing to retain the specified central of the image as a percent.
     """
     # params to add later: model, boolean for progress bar
 
@@ -71,6 +81,18 @@ def extract_img_features(
     processor = transformers.AutoImageProcessor.from_pretrained(model.id)
     hf_logger = logging.getLogger("transformers.modeling_utils")
     load_filter = ExpectedUnexpectedKeysFilter(model.ignore_unexpected)
+
+    transforms = None
+    transform_ops = []
+    if center_crop is not None:
+        # fixme: not actually working
+        transform_ops.append(v2.Lambda(lambda im: center_crop_pct(im, center_crop)))
+    if grayscale:
+        transform_ops.append(v2.Grayscale())
+
+    if transform_ops:
+        transforms = v2.Compose(transform_ops)
+
     if model.ignore_unexpected:
         hf_logger.addFilter(load_filter)
     try:
@@ -98,6 +120,9 @@ def extract_img_features(
 
     progbar = tqdm(desc="Extracting features", total=img_dataset.image_count)
     for images, paths in dataloader:
+        # apply pre-processing transforms if any
+        if transforms is not None:
+            images = [transforms(img) for img in images]
         inputs = processor(images, return_tensors="pt").to(device)
         with torch.no_grad():
             outputs = embed_model(**inputs)
