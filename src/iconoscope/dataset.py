@@ -10,7 +10,7 @@ import polars as pl
 from PIL import Image
 from torch.utils.data import IterableDataset
 
-from iconoscope.models import EmbeddingModel
+from iconoscope.models import EmbeddingConfig
 from iconoscope.umap import reduce_features
 
 logger = logging.getLogger(__name__)
@@ -87,21 +87,11 @@ class StorageSchema:
     attr_schema_version = "schema_version"
 
     @classmethod
-    def model_group(cls, model_name, absolute=False, **opts) -> str:
-        model_opts = "default"
-        if any(opts.values()):
-            opt_labels = []
-            for key, value in opts.items():
-                if value is None:  # omit
-                    continue
-                if isinstance(value, bool) and value:
-                    opt_labels.append(key)
-                else:
-                    opt_labels.append(f"{key}={value}")
-            model_opts = "|".join(opt_labels)
-            print(model_opts)
+    def model_group(cls, config: EmbeddingConfig, absolute: bool = False) -> str:
+        """Group path for features and derived data for a model + preprocessing
+        configuration; relative to the all-models group unless `absolute`."""
         base_path = f"{cls.image_group}/{cls.all_models_group}/" if absolute else ""
-        return f"{base_path}{model_name}/{model_opts}"
+        return f"{base_path}{config.model.name}/{config.key}"
 
 
 # IMAGE_GROUP = "image"
@@ -259,9 +249,8 @@ class ImageDataset(IterableDataset):
     def save_features(
         self,
         df: pl.DataFrame,
-        model: EmbeddingModel,
+        config: EmbeddingConfig,
         overwrite: bool = False,
-        **preprocess_opts,
     ) -> None:
         """Save image features for the specified model; supports updating HDF5 without overwriting
         existing data, e.g. features from other models.
@@ -346,12 +335,11 @@ class ImageDataset(IterableDataset):
             # unless overwrite is requested.
             all_models_grp = img_grp.require_group(self.schema.all_models_group)
             # determine group name for current model with current options
-            model_group_name = self.schema.model_group(model.name, **preprocess_opts)
-            if all_models_grp is not None and model_group_name in all_models_grp:
+            model_group_name = self.schema.model_group(config)
+            if model_group_name in all_models_grp:
                 if not overwrite:
                     raise ValueError(
-                        # TODO: use current_model_grp and/or include preprocess opts
-                        f"Features for '{model.name}' are already present and overwrite not requested."
+                        f"Features for '{model_group_name}' are already present and overwrite not requested."
                     )
                 # delete the whole model group, since any downstream results
                 # (umap/cluster) will be invalid for the new features
@@ -378,43 +366,39 @@ class ImageDataset(IterableDataset):
                 self.schema.features_ds, data=features, compression="gzip"
             )
 
-    def has_features(
-        self, model: EmbeddingModel | None = None, **preprocess_opts
-    ) -> bool:
-        if self.storage_path.exists():
-            with h5py.File(self.storage_path, "r") as f:
-                if model is not None:
-                    # TODO: decide when has features means any features for model vs specific model + pre-processing
-                    # NOTE: could also support ANY model features ?
-                    # get the absolute path to the specific model group within the hdf5 file
-                    # TODO: include preprocess opts
-                    model_group_name = self.schema.model_group(
-                        model.name, absolute=True, **preprocess_opts
-                    )
-                    return (
-                        model_group_name in f
-                        and self.schema.features_ds in f[model_group_name]
-                    )
-                else:
-                    all_model_grp = f[self.schema.all_models_group]
-                    # if groups are present is that sufficient? or check for features?
-                    return len(all_model_grp) != 0
-
-        return False
+    def has_features(self, config: EmbeddingConfig | None = None) -> bool:
+        """Check if features are stored for the specified model + preprocessing
+        configuration; if no configuration is specified, check for any features."""
+        if not self.storage_path.exists():
+            return False
+        with h5py.File(self.storage_path, "r") as f:
+            if config is not None:
+                model_group_name = self.schema.model_group(config, absolute=True)
+                return (
+                    model_group_name in f
+                    and self.schema.features_ds in f[model_group_name]
+                )
+            all_models_grp = f.get(
+                f"{self.schema.image_group}/{self.schema.all_models_group}"
+            )
+            if all_models_grp is None:
+                return False
+            # check for features stored under any model/options group
+            return any(
+                self.schema.features_ds in opt_grp
+                for model_grp in all_models_grp.values()
+                for opt_grp in model_grp.values()
+            )
 
     def save_clusters(
         self,
         labels: np.ndarray,
         n_clusters: int,
-        model: EmbeddingModel,
-        **preprocess_opts,
+        config: EmbeddingConfig,
     ) -> None:
         # save cluster labels generated by clustering features from a specific model
         with h5py.File(self.storage_path, "r+") as f:
-            # get the model group for this model; TODO: include pre-processing opts
-            model_group_name = self.schema.model_group(
-                model.name, absolute=True, **preprocess_opts
-            )
+            model_group_name = self.schema.model_group(config, absolute=True)
             model_grp = f[model_group_name]
             # create new dataset and save labels
             cluster_ds = model_grp.create_dataset(
@@ -459,9 +443,6 @@ class ImageDataset(IterableDataset):
                     # each model can have one or more group with preprocessing options
                     for model_opt_grp_name in model_grp.keys():
                         model_data = {}
-                        print(
-                            f"*** getting info for {model_grp_name}/{model_opt_grp_name}"
-                        )
                         model_opt_grp = model_grp[model_opt_grp_name]
                         features_dataset = model_opt_grp.get(self.schema.features_ds)
                         umap_dataset = model_opt_grp.get(self.schema.umap_ds)
@@ -488,12 +469,11 @@ class ImageDataset(IterableDataset):
 
     def load_data(
         self,
-        model: None | EmbeddingModel = None,
+        config: EmbeddingConfig | None = None,
         paths=True,
         features=False,
         umap=False,
         clusters=False,
-        **preprocess_opts,
     ) -> pl.DataFrame:
         # if umap is requested, open in read/write mode in case we need to save
         read_mode = "r+" if umap else "r"
@@ -513,14 +493,13 @@ class ImageDataset(IterableDataset):
                 data["image_size"] = img_sizes[:]
 
             if features or umap:
-                # model is required if features/umap requested
-                if model is None:
-                    raise ValueError("model is required to load features or umap")
+                # model configuration is required if features/umap requested
+                if config is None:
+                    raise ValueError(
+                        "model configuration is required to load features or umap"
+                    )
 
-                all_models_grp = img_grp[self.schema.all_models_group]
-                model_grp = all_models_grp[
-                    self.schema.model_group(model.name, **preprocess_opts)
-                ]
+                model_grp = f[self.schema.model_group(config, absolute=True)]
 
                 features_dataset = None
                 if umap:

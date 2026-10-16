@@ -5,7 +5,9 @@ import polars as pl
 import pytest
 
 from iconoscope.cluster import identify_clusters
-from iconoscope.models import DEFAULT_MODEL
+from iconoscope.models import DEFAULT_MODEL, EmbeddingConfig
+
+CONFIG = EmbeddingConfig(DEFAULT_MODEL)
 
 
 def _features_df(features: np.ndarray) -> pl.DataFrame:
@@ -29,7 +31,7 @@ def test_identify_clusters_returns_label_per_item():
     features = rng.random((10, 8))
     mock_ds = _mock_dataset(features)
 
-    labels = identify_clusters(mock_ds, DEFAULT_MODEL, n_clusters=3)
+    labels = identify_clusters(mock_ds, CONFIG, n_clusters=3)
 
     assert isinstance(labels, np.ndarray)
     assert len(labels) == 10
@@ -42,9 +44,9 @@ def test_identify_clusters_requests_features_only():
     features = rng.random((6, 4))
     mock_ds = _mock_dataset(features)
 
-    identify_clusters(mock_ds, DEFAULT_MODEL, n_clusters=2)
+    identify_clusters(mock_ds, CONFIG, n_clusters=2)
 
-    mock_ds.load_data.assert_called_once_with(model=DEFAULT_MODEL, features=True)
+    mock_ds.load_data.assert_called_once_with(CONFIG, features=True)
 
 
 def test_identify_clusters_separates_distinct_groups():
@@ -55,7 +57,7 @@ def test_identify_clusters_separates_distinct_groups():
     features = np.vstack([blob1, blob2])
     mock_ds = _mock_dataset(features)
 
-    labels = identify_clusters(mock_ds, DEFAULT_MODEL, n_clusters=2)
+    labels = identify_clusters(mock_ds, CONFIG, n_clusters=2)
 
     # all items in the first blob share a label, all items in second blob share
     # a (different) label
@@ -72,7 +74,7 @@ def test_identify_clusters_respects_n_clusters():
     features = np.vstack(blobs)
     mock_ds = _mock_dataset(features)
 
-    labels = identify_clusters(mock_ds, DEFAULT_MODEL, n_clusters=4)
+    labels = identify_clusters(mock_ds, CONFIG, n_clusters=4)
 
     assert len(set(labels.tolist())) == 4
 
@@ -82,8 +84,8 @@ def test_identify_clusters_is_deterministic():
     rng = np.random.default_rng(4)
     features = rng.random((12, 6))
 
-    labels_a = identify_clusters(_mock_dataset(features), DEFAULT_MODEL, n_clusters=3)
-    labels_b = identify_clusters(_mock_dataset(features), DEFAULT_MODEL, n_clusters=3)
+    labels_a = identify_clusters(_mock_dataset(features), CONFIG, n_clusters=3)
+    labels_b = identify_clusters(_mock_dataset(features), CONFIG, n_clusters=3)
 
     assert (labels_a == labels_b).all()
 
@@ -93,7 +95,7 @@ def test_identify_clusters_single_cluster():
     features = rng.random((6, 4))
     mock_ds = _mock_dataset(features)
 
-    labels = identify_clusters(mock_ds, DEFAULT_MODEL, n_clusters=1)
+    labels = identify_clusters(mock_ds, CONFIG, n_clusters=1)
 
     assert set(labels.tolist()) == {0}
 
@@ -104,4 +106,4 @@ def test_identify_clusters_n_clusters_greater_than_items():
     mock_ds = _mock_dataset(features)
 
     with pytest.raises(ValueError):
-        identify_clusters(mock_ds, DEFAULT_MODEL, n_clusters=5)
+        identify_clusters(mock_ds, CONFIG, n_clusters=5)

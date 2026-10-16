@@ -6,7 +6,7 @@ import numpy as np
 
 from iconoscope.commands import embed
 from iconoscope.dataset import ImageDataset
-from iconoscope.models import DEFAULT_MODEL
+from iconoscope.models import DEFAULT_MODEL, EmbeddingConfig
 
 
 def embed_args(dataset: Path, update: bool, **opts) -> argparse.Namespace:
@@ -45,5 +45,7 @@ def test_embed_existing_model_features_bail_out(
     mock_extract_features.assert_called()
     output = capsys.readouterr().out
     assert "Successfully extracted features" in output
-    saved = ImageDataset(storage_path=h5_file).load_data(DEFAULT_MODEL, features=True)
+    saved = ImageDataset(storage_path=h5_file).load_data(
+        EmbeddingConfig(DEFAULT_MODEL), features=True
+    )
     assert np.all(saved["features"].to_numpy() == 1)

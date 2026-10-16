@@ -14,26 +14,19 @@ def get_model(name: str) -> EmbeddingModel:
         raise SystemExit(f"Unknown model `{name}`") from None
 
 
-def get_preprocess_opts(args: argparse.Namespace) -> dict:
-    opts = {}
-    if getattr(args, "center_crop", None):
-        opts["center_crop"] = args.center_crop
-    if getattr(args, "grayscale", None):
-        opts["grayscale"] = args.grayscale
-    return opts
-
-
-def get_embedding_config(args) -> EmbeddingConfig:
+def get_embedding_config(args: argparse.Namespace) -> EmbeddingConfig:
+    """Build an embedding configuration (model + preprocessing options) from CLI args."""
     model = get_model(args.model)
     opts = {field: getattr(args, field) for field in EmbeddingConfig.option_names()}
     return EmbeddingConfig(model, **opts)
 
 
-def require_features(
-    img_dataset: ImageDataset, model: EmbeddingModel, **preprocssing_opts
-) -> None:
-    """Exit with an error if the dataset has no features for the specified model."""
-    if not img_dataset.has_features(model, **preprocssing_opts):
+def require_features(img_dataset: ImageDataset, config: EmbeddingConfig) -> None:
+    """Exit with an error if the dataset has no features for the specified
+    model and preprocessing configuration."""
+    if not img_dataset.has_features(config):
         raise SystemExit(
-            f"No features for `{model.name}`; run `iconoscope embed --model {model.name}` first"
+            f"No features for `{config.model.name}/{config.key}`; "
+            f"run `iconoscope embed --model {config.model.name}` "
+            "with the same preprocessing options first"
         )

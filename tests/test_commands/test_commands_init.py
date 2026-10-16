@@ -2,6 +2,7 @@ import argparse
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from iconoscope import cli
@@ -68,3 +69,24 @@ def test_cli_args_to_embedding_config(tmp_path):
     assert config.center_crop == 60.0
     assert config.grayscale is True
     assert config.key == "center_crop=60.0_grayscale"
+
+
+def test_require_features(tmp_image_dir):
+    from iconoscope.commands import require_features
+    from iconoscope.dataset import ImageDataset
+
+    dataset = ImageDataset.create(tmp_image_dir, tmp_image_dir / "data.h5")
+    config = EmbeddingConfig(DEFAULT_MODEL, grayscale=True)
+    with pytest.raises(
+        SystemExit, match=f"No features for `{DEFAULT_MODEL.name}/grayscale`"
+    ):
+        require_features(dataset, config)
+
+    df = dataset.get_image_data().select("image_path")
+    df = df.with_columns(features=np.zeros((df.height, 4)))
+    dataset.save_features(df, config)
+    # no error when features for the configuration are present
+    require_features(dataset, config)
+    # still an error for a different configuration of the same model
+    with pytest.raises(SystemExit):
+        require_features(dataset, EmbeddingConfig(DEFAULT_MODEL))

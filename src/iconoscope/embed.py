@@ -9,7 +9,7 @@ from torchvision.transforms import v2
 from tqdm import tqdm
 
 from iconoscope.dataset import ImageDataset
-from iconoscope.models import EmbeddingModel
+from iconoscope.models import EmbeddingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +55,15 @@ def center_crop_pct(img, pct):
 
 
 def extract_img_features(
-    img_dataset: ImageDataset, model: EmbeddingModel, center_crop=None, grayscale=False
+    img_dataset: ImageDataset, config: EmbeddingConfig
 ) -> pl.DataFrame:
     """
-    Takes an image dataset and extracts features using the specified model. Returns a DataFrame with image_path, features.
+    Takes an image dataset and extracts features using the model and preprocessing
+    options in the specified configuration. Returns a DataFrame with image_path, features.
 
     If center crop is specified, customizes image preprocessing to retain the specified central of the image as a percent.
     """
+    model = config.model
     # params to add later: model, boolean for progress bar
 
     # autodetect which device to use
@@ -84,10 +86,12 @@ def extract_img_features(
 
     transforms = None
     transform_ops = []
-    if center_crop is not None:
+    if config.center_crop is not None:
         # fixme: not actually working
-        transform_ops.append(v2.Lambda(lambda im: center_crop_pct(im, center_crop)))
-    if grayscale:
+        transform_ops.append(
+            v2.Lambda(lambda im: center_crop_pct(im, config.center_crop))
+        )
+    if config.grayscale:
         transform_ops.append(v2.Grayscale())
 
     if transform_ops:
