@@ -92,8 +92,9 @@ def test_require_features(tmp_image_dir):
         require_features(dataset, EmbeddingConfig(DEFAULT_MODEL))
 
 
-def test_cli_center_crop_100_is_default(tmp_path):
+def test_cli_center_crop_100(tmp_path):
+    # 100% keeps the whole image (without model cropping); not the default
     dataset = tmp_path / "data.h5"
     dataset.touch()
     args = parse_cli_args(["embed", str(dataset), "--center-crop", "100"])
-    assert get_embedding_config(args) == EmbeddingConfig(DEFAULT_MODEL)
+    assert get_embedding_config(args) == EmbeddingConfig(DEFAULT_MODEL, center_crop=1.0)

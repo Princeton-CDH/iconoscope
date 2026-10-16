@@ -34,9 +34,6 @@ class EmbeddingConfig:
                 raise ValueError(
                     f"center_crop must be a fraction between 0 and 1 (got {self.center_crop})"
                 )
-            # retaining 100% of the image is the same as no crop
-            if self.center_crop == 1.0:
-                object.__setattr__(self, "center_crop", None)
 
     @classmethod
     def option_names(cls) -> list[str]:

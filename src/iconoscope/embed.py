@@ -5,7 +5,9 @@ import torch
 import transformers
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
+from PIL import Image
 from torchvision.transforms import v2
+from torchvision.transforms.v2.functional import center_crop
 from tqdm import tqdm
 
 from iconoscope.dataset import ImageDataset
@@ -47,11 +49,50 @@ class ExpectedUnexpectedKeysFilter(logging.Filter):
         return False
 
 
-def center_crop_pct(img, pct):
-    img_height, img_width = v2.functional.get_size(img)
-    return v2.functional.center_crop(
-        img, [round(img_height * pct), round(img_width * pct)]
-    )
+def model_input_size(processor) -> tuple[int, int]:
+    """Determine the (height, width) of the images the model's processor
+    produces: the crop size if the processor center-crops, otherwise its
+    resize target."""
+    if getattr(processor, "do_center_crop", False) and processor.crop_size:
+        size = processor.crop_size
+    else:
+        size = processor.size
+    # size may be a dict or a SizeDict, depending on transformers version
+    size = dict(size.items()) if hasattr(size, "items") else vars(size)
+    if size.get("height") and size.get("width"):
+        return (size["height"], size["width"])
+    if size.get("shortest_edge"):
+        return (size["shortest_edge"], size["shortest_edge"])
+    raise ValueError(f"Could not determine model input size from {size}")
+
+
+class CenterCropPercent:
+    """Crop to the center portion of an image, relative to the model input
+    size (same approach as timm/ConvNeXt `crop_pct`): resize so the image
+    covers the target size divided by the fraction, then center-crop to the
+    target size. The output is exactly the model input size, so the model
+    sees the central `fraction` of the image (based on the shortest edge)."""
+
+    def __init__(self, fraction: float, target_size: tuple[int, int]):
+        self.fraction = fraction
+        self.target_size = target_size
+
+    def __call__(self, img: Image.Image) -> Image.Image:
+        width, height = img.size
+        target_h, target_w = self.target_size
+        # scale so the image covers the enlarged target in both dimensions
+        scale = max(target_h / height, target_w / width) / self.fraction
+        resized = img.resize(
+            (max(target_w, round(width * scale)), max(target_h, round(height * scale))),
+            Image.Resampling.BICUBIC,
+        )
+        return center_crop(resized, list(self.target_size))
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}({self.fraction * 100:g}% "
+            f"of {self.target_size[1]}x{self.target_size[0]})"
+        )
 
 
 def extract_img_features(
@@ -61,7 +102,9 @@ def extract_img_features(
     Takes an image dataset and extracts features using the model and preprocessing
     options in the specified configuration. Returns a DataFrame with image_path, features.
 
-    If center crop is specified, customizes image preprocessing to retain the specified central portion of the image (fraction, 0.0-1.0).
+    If center crop is specified, customizes image preprocessing to retain the specified
+    central portion of the image (fraction, 0.0-1.0, relative to the shortest edge) at the
+    model input size, replacing any resizing and cropping done by the model's processor.
     """
     model = config.model
     # params to add later: model, boolean for progress bar
@@ -86,10 +129,16 @@ def extract_img_features(
 
     transforms = None
     transform_ops = []
+    # additional options to pass to the processor
+    processor_opts = {}
     if config.center_crop is not None:
+        # Many processors (e.g. DINOv2, CLIP, ResNet) also resize and center crop,
+        # which would crop the custom crop further. Output the custom crop at the
+        # model input size and disable the processor's resizing and cropping.
         transform_ops.append(
-            v2.Lambda(lambda im: center_crop_pct(im, config.center_crop))
+            CenterCropPercent(config.center_crop, model_input_size(processor))
         )
+        processor_opts = {"do_resize": False, "do_center_crop": False}
     if config.grayscale:
         transform_ops.append(v2.Grayscale())
 
@@ -126,7 +175,7 @@ def extract_img_features(
         # apply pre-processing transforms if any
         if transforms is not None:
             images = [transforms(img) for img in images]
-        inputs = processor(images, return_tensors="pt").to(device)
+        inputs = processor(images, return_tensors="pt", **processor_opts).to(device)
         with torch.no_grad():
             outputs = embed_model(**inputs)
             # some models (e.g. ResNet) return pooled output as (N, C, 1, 1);

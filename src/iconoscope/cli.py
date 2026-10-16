@@ -106,7 +106,12 @@ def main():
         "--center-crop",
         type=percentage,
         metavar="CROP",
-        help="Center crop images before embedding: percentage of image to retain, greater than 0 and up to 100 (e.g., 60 to use central 60%% of image)",
+        help=(
+            "Center crop images before embedding: percentage of image to retain, "
+            "greater than 0 and up to 100 (e.g., 60 to use central 60%% of image). "
+            "Crop is square, relative to the shortest edge, and replaces the "
+            "model's default resizing and cropping."
+        ),
     )
     model_parser.add_argument(
         "--grayscale",
