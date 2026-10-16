@@ -222,12 +222,7 @@ def _(ModelPicker, info, mo, models):
             selected=list(models),
         )
     )
-    mo.vstack(
-        [
-            mo.md("**Models** — check to display; drag or use arrows to reorder"),
-            model_picker,
-        ]
-    )
+    # displayed next to the query image, below
     return (model_picker,)
 
 
@@ -294,21 +289,29 @@ def _(image_df, mo, random, random_button):
 
 
 @app.cell
+def _(image_df, image_index):
+    query_idx = int(image_index.value)
+    query_path = image_df["image_path"][query_idx]
+    return query_idx, query_path
+
+
+@app.cell(hide_code=True)
 def _(
-    image_df,
     image_index,
     k_slider,
     mo,
+    model_picker,
+    query_path,
     random_button,
     show_captions,
     thumb_size,
 ):
-    query_idx = int(image_index.value)
-    query_path = image_df["image_path"][query_idx]
+    # controls | query image | model picker
     mo.hstack(
         [
             mo.vstack(
-                [image_index, random_button, k_slider, thumb_size, show_captions]
+                [image_index, random_button, k_slider, thumb_size, show_captions],
+                align="start",
             ),
             mo.vstack(
                 [
@@ -322,13 +325,24 @@ def _(
                         },
                     ),
                     mo.md(f"`{query_path}`").style({"font-size": "0.8em"}),
-                ]
+                ],
+                align="start",
+            ),
+            mo.vstack(
+                [
+                    mo.md(
+                        "**Models** — check to display; drag or use arrows to reorder"
+                    ),
+                    model_picker,
+                ],
+                align="start",
             ),
         ],
         justify="start",
+        align="start",
         gap=2,
     )
-    return (query_idx,)
+    return
 
 
 @app.cell
