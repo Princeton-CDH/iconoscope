@@ -3,7 +3,7 @@
 import argparse
 
 from iconoscope.dataset import ImageDataset
-from iconoscope.models import AVAILABLE_MODELS, EmbeddingModel
+from iconoscope.models import AVAILABLE_MODELS, EmbeddingConfig, EmbeddingModel
 
 
 def get_model(name: str) -> EmbeddingModel:
@@ -21,6 +21,12 @@ def get_preprocess_opts(args: argparse.Namespace) -> dict:
     if getattr(args, "grayscale", None):
         opts["grayscale"] = args.grayscale
     return opts
+
+
+def get_embedding_config(args) -> EmbeddingConfig:
+    model = get_model(args.model)
+    opts = {field: getattr(args, field) for field in EmbeddingConfig.option_names()}
+    return EmbeddingConfig(model, **opts)
 
 
 def require_features(

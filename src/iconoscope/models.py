@@ -1,8 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from functools import cached_property
 
 
 @dataclass(frozen=True)
 class EmbeddingModel:
+    """Configuration for supported vision or multimodal models."""
+
     #: shorthand name
     name: str
     #: pretrained model name, for use with hugging face from_pretrained method
@@ -15,6 +18,47 @@ class EmbeddingModel:
     ignore_unexpected: tuple[str, ...] = ()
     #: optional transformers model class to use, for models that require something other than AutoModel
     hf_model_class: str | None = None
+
+
+@dataclass(frozen=True)
+class EmbeddingConfig:
+    """Configuration for a specific model and pre-processing options."""
+
+    model: EmbeddingModel
+    center_crop: float | None = None
+    grayscale: bool = False
+
+    @classmethod
+    def option_names(cls) -> list[str]:
+        "names of fields corresponding to supported pre-processing options"
+        return [f.name for f in fields(cls) if f.name != "model"]
+
+    @cached_property
+    def opts(self) -> dict:
+        return {f: getattr(self, f) for f in self.option_names()}
+
+    @cached_property
+    def key(self) -> str:
+        model_opts = "defaults"
+        opt_labels = []
+        for key, value in self.opts.items():
+            # if property is unset, omit from key
+            if value is None:
+                continue
+            # if property is boolean, include property name when True; omit if False
+            if isinstance(value, bool) and value:
+                opt_labels.append(key)
+            # otherwise, include both key and value
+            else:
+                opt_labels.append(f"{key}={value}")
+            model_opts = "|".join(opt_labels)
+
+        # if any options are set, return as label
+        if opt_labels:
+            model_opts = "_".join(opt_labels)
+
+        # if no customization, return "defaults"
+        return model_opts
 
 
 _models = [
