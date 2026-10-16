@@ -19,9 +19,9 @@ def test_get_embedding_config_defaults():
 
 def test_get_embedding_config_opts():
     model = AVAILABLE_MODELS["clip"]
-    args = argparse.Namespace(model="clip", center_crop=60.0, grayscale=True)
+    args = argparse.Namespace(model="clip", center_crop=0.6, grayscale=True)
     config = get_embedding_config(args)
-    assert config == EmbeddingConfig(model, center_crop=60.0, grayscale=True)
+    assert config == EmbeddingConfig(model, center_crop=0.6, grayscale=True)
 
 
 def test_get_embedding_config_unknown_model():
@@ -66,9 +66,9 @@ def test_cli_args_to_embedding_config(tmp_path):
     )
     config = get_embedding_config(args)
     assert config.model == AVAILABLE_MODELS["clip"]
-    assert config.center_crop == 60.0
+    assert config.center_crop == 0.6
     assert config.grayscale is True
-    assert config.key == "center_crop=60.0_grayscale"
+    assert config.key == "center_crop=0.6_grayscale"
 
 
 def test_require_features(tmp_image_dir):
@@ -90,3 +90,10 @@ def test_require_features(tmp_image_dir):
     # still an error for a different configuration of the same model
     with pytest.raises(SystemExit):
         require_features(dataset, EmbeddingConfig(DEFAULT_MODEL))
+
+
+def test_cli_center_crop_100_is_default(tmp_path):
+    dataset = tmp_path / "data.h5"
+    dataset.touch()
+    args = parse_cli_args(["embed", str(dataset), "--center-crop", "100"])
+    assert get_embedding_config(args) == EmbeddingConfig(DEFAULT_MODEL)

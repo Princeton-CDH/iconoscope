@@ -1,4 +1,5 @@
 import argparse
+import sys
 from importlib import import_module
 from pathlib import Path
 
@@ -35,13 +36,24 @@ def new_file(value: str) -> Path:
 
 
 def percentage(value: str) -> float:
+    """Parse a percentage greater than 0 and up to 100; returns it as a
+    fraction (0.0-1.0), rounded to avoid floating point noise."""
     try:
         percent = float(value)
     except ValueError:
         raise argparse.ArgumentTypeError(f"Could not convert `{value}` to percentage")
-    if percent > 100.0 or percent < 0.0:
-        raise argparse.ArgumentTypeError(f"{value} must be between 0 and 100")
-    return percent
+    if not 0.0 < percent <= 100.0:
+        raise argparse.ArgumentTypeError(
+            f"{value} must be greater than 0 and no more than 100"
+        )
+    if percent < 1.0:
+        # likely a fraction entered by mistake (e.g. 0.6 instead of 60)
+        print(
+            f"Warning: {value} is interpreted as {value}% of the image; "
+            f"use {percent * 100:g} for {percent * 100:g}%",
+            file=sys.stderr,
+        )
+    return round(percent / 100, 4)
 
 
 HANDLERS = {
@@ -94,7 +106,7 @@ def main():
         "--center-crop",
         type=percentage,
         metavar="CROP",
-        help="Custom image center crop before embedding (percentage of image to retain as a value from 1 to 100; e.g., 60 to use central 60%% of image)",
+        help="Center crop images before embedding: percentage of image to retain, greater than 0 and up to 100 (e.g., 60 to use central 60%% of image)",
     )
     model_parser.add_argument(
         "--grayscale",

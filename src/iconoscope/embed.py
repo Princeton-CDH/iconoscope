@@ -61,7 +61,7 @@ def extract_img_features(
     Takes an image dataset and extracts features using the model and preprocessing
     options in the specified configuration. Returns a DataFrame with image_path, features.
 
-    If center crop is specified, customizes image preprocessing to retain the specified central of the image as a percent.
+    If center crop is specified, customizes image preprocessing to retain the specified central portion of the image (fraction, 0.0-1.0).
     """
     model = config.model
     # params to add later: model, boolean for progress bar
@@ -87,7 +87,6 @@ def extract_img_features(
     transforms = None
     transform_ops = []
     if config.center_crop is not None:
-        # fixme: not actually working
         transform_ops.append(
             v2.Lambda(lambda im: center_crop_pct(im, config.center_crop))
         )

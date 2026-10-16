@@ -28,6 +28,16 @@ class EmbeddingConfig:
     center_crop: float | None = None
     grayscale: bool = False
 
+    def __post_init__(self):
+        if self.center_crop is not None:
+            if not 0.0 < self.center_crop <= 1.0:
+                raise ValueError(
+                    f"center_crop must be a fraction between 0 and 1 (got {self.center_crop})"
+                )
+            # retaining 100% of the image is the same as no crop
+            if self.center_crop == 1.0:
+                object.__setattr__(self, "center_crop", None)
+
     @classmethod
     def option_names(cls) -> list[str]:
         "names of fields corresponding to supported pre-processing options"
@@ -49,6 +59,9 @@ class EmbeddingConfig:
                 opt_labels.append(key)
             # otherwise, include both key and value
             else:
+                # format floats compactly (0.6 not 0.6000000001)
+                if isinstance(value, float):
+                    value = f"{value:g}"
                 opt_labels.append(f"{key}={value}")
 
         # if no customization, return "defaults"

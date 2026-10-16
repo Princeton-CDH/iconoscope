@@ -500,9 +500,9 @@ def _two_image_dataset(tmp_image_dir: Path) -> tuple[ImageDataset, pl.DataFrame]
         (CONFIG, False, "dinov2/defaults"),
         (CONFIG, True, "image/models/dinov2/defaults"),
         (
-            EmbeddingConfig(DEFAULT_MODEL, center_crop=60.0, grayscale=True),
+            EmbeddingConfig(DEFAULT_MODEL, center_crop=0.6, grayscale=True),
             True,
-            "image/models/dinov2/center_crop=60.0_grayscale",
+            "image/models/dinov2/center_crop=0.6_grayscale",
         ),
     ],
 )
@@ -541,13 +541,13 @@ def test_has_features_preprocess_specific(tmp_image_dir: Path):
     # same model with different preprocessing is a different feature set
     assert not dataset.has_features(CONFIG)
     assert not dataset.has_features(
-        EmbeddingConfig(DEFAULT_MODEL, center_crop=60.0, grayscale=True)
+        EmbeddingConfig(DEFAULT_MODEL, center_crop=0.6, grayscale=True)
     )
 
 
 def test_save_load_features_per_preprocess_config(tmp_image_dir: Path):
     dataset, feature_df = _two_image_dataset(tmp_image_dir)
-    crop_config = EmbeddingConfig(DEFAULT_MODEL, center_crop=60.0)
+    crop_config = EmbeddingConfig(DEFAULT_MODEL, center_crop=0.6)
     dataset.save_features(feature_df, CONFIG)
     # same model with different options does not conflict with existing features
     dataset.save_features(
@@ -561,10 +561,10 @@ def test_save_load_features_per_preprocess_config(tmp_image_dir: Path):
     assert crop_df["features"].to_numpy().tolist() == [[7.0, 7.0], [8.0, 8.0]]
 
     with h5py.File(dataset.storage_path, "r") as h5_file:
-        assert set(h5_file["image/models/dinov2"]) == {"defaults", "center_crop=60.0"}
+        assert set(h5_file["image/models/dinov2"]) == {"defaults", "center_crop=0.6"}
     assert set(dataset.info()["models"]) == {
         "dinov2/defaults",
-        "dinov2/center_crop=60.0",
+        "dinov2/center_crop=0.6",
     }
 
 
