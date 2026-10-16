@@ -10,7 +10,7 @@ import polars as pl
 from PIL import Image
 from torch.utils.data import IterableDataset
 
-from iconoscope.models import EmbeddingConfig
+from iconoscope.models import AVAILABLE_MODELS, EmbeddingConfig
 from iconoscope.umap import reduce_features
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,10 @@ class StorageSchema:
     features_ds: str = "features"
     umap_ds: str = "umap"
     cluster_ds: str = "cluster"
+
+    # model group attrs
+    attr_model = "model"
+    attr_model_id = "model_id"
 
     # schema attrs
     attr_schema = "schema"
@@ -361,6 +365,13 @@ class ImageDataset(IterableDataset):
                     compression="gzip",
                 )
             model_grp = all_models_grp.create_group(model_group_name)
+            # store model + preprocessing options so config can be reconstructed
+            model_grp.attrs[self.schema.attr_model] = config.model.name
+            model_grp.attrs[self.schema.attr_model_id] = config.model.id
+            for opt, value in config.opts.items():
+                # HDF5 attrs can't store None; omit unset options
+                if value is not None:
+                    model_grp.attrs[opt] = value
             # save extracted features as a dataset
             model_grp.create_dataset(
                 self.schema.features_ds, data=features, compression="gzip"
@@ -463,6 +474,36 @@ class ImageDataset(IterableDataset):
                             model_data
                         )
             return info
+
+    def get_configs(self) -> list[EmbeddingConfig]:
+        """Embedding configurations (model + preprocessing options) with
+        features stored in this dataset, reconstructed from group attributes.
+        Groups without config attributes or for unavailable models are skipped."""
+        configs = []
+        with h5py.File(self.storage_path, "r") as f:
+            all_models_grp = f[self.schema.image_group].get(
+                self.schema.all_models_group
+            )
+            if all_models_grp is None:
+                return configs
+            for model_grp in all_models_grp.values():
+                for opt_grp in model_grp.values():
+                    if self.schema.features_ds not in opt_grp:
+                        continue
+                    model = AVAILABLE_MODELS.get(
+                        opt_grp.attrs.get(self.schema.attr_model)
+                    )
+                    if model is None:
+                        continue
+                    opts = {
+                        opt: opt_grp.attrs[opt].item()
+                        if hasattr(opt_grp.attrs[opt], "item")
+                        else opt_grp.attrs[opt]
+                        for opt in EmbeddingConfig.option_names()
+                        if opt in opt_grp.attrs
+                    }
+                    configs.append(EmbeddingConfig(model, **opts))
+        return configs
 
     def get_image_data(self) -> pl.DataFrame:
         return self.load_data()  # images paths only by default

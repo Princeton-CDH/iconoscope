@@ -599,3 +599,31 @@ def test_save_clusters_preprocess_config(tmp_image_dir: Path):
     info = dataset.info()["models"]
     assert info["dinov2/grayscale"]["cluster"]["k"] == 2
     assert "cluster" not in info["dinov2/defaults"]
+
+
+def test_save_features_stores_config_attrs(tmp_path: Path, tmp_image_dir: Path):
+    storage_path = tmp_path / "data.h5"
+    dataset = ImageDataset.create(
+        storage_path=storage_path, image_dir=tmp_image_dir, max_images=2
+    )
+    paths = [str(p) for p in dataset.get_image_paths()]
+    df = pl.DataFrame(
+        {"image_path": paths, "features": np.array([[1.0, 0.0], [0.0, 1.0]])}
+    )
+    custom = EmbeddingConfig(DEFAULT_MODEL, center_crop=0.6, grayscale=True)
+    dataset.save_features(df, CONFIG)
+    dataset.save_features(df, custom)
+
+    with h5py.File(storage_path, "r") as h5_file:
+        attrs = h5_file[dataset.schema.model_group(custom, absolute=True)].attrs
+        assert attrs["model"] == DEFAULT_MODEL.name
+        assert attrs["model_id"] == DEFAULT_MODEL.id
+        assert attrs["center_crop"] == 0.6
+        assert attrs["grayscale"]
+        default_attrs = h5_file[dataset.schema.model_group(CONFIG, absolute=True)].attrs
+        assert "center_crop" not in default_attrs
+        assert not default_attrs["grayscale"]
+
+    configs = dataset.get_configs()
+    assert set(configs) == {CONFIG, custom}
+    assert all(isinstance(c.grayscale, bool) for c in configs)
