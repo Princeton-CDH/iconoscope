@@ -41,6 +41,7 @@ iconoscope = "iconoscope.cli:main"
 
 [dependency-groups]
 dev = [
+    "altair>=6.3.0",
     "marimo>=0.25.1",
     "pytest>=8.0",
     "pytest-cov>=7.1.0",
