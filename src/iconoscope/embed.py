@@ -95,6 +95,48 @@ class CenterCropPercent:
         )
 
 
+def preprocessing(config: EmbeddingConfig, processor) -> tuple[v2.Compose | None, dict]:
+    """Build the custom pre-processing transforms (or None) and any extra
+    options to pass to the model's processor for the given configuration."""
+    transform_ops = []
+    # additional options to pass to the processor
+    processor_opts = {}
+    if config.center_crop is not None:
+        # Many processors (e.g. DINOv2, CLIP, ResNet) also resize and center crop,
+        # which would crop the custom crop further. Output the custom crop at the
+        # model input size and disable the processor's resizing and cropping.
+        transform_ops.append(
+            CenterCropPercent(config.center_crop, model_input_size(processor))
+        )
+        processor_opts = {"do_resize": False, "do_center_crop": False}
+    if config.grayscale:
+        transform_ops.append(v2.Grayscale())
+    transforms = v2.Compose(transform_ops) if transform_ops else None
+    return transforms, processor_opts
+
+
+def preview_model_input(
+    images: list[Image.Image], config: EmbeddingConfig, processor=None
+) -> list[Image.Image]:
+    """Return images as the model will see them: custom transforms plus the
+    model processor's resize/crop/normalization, with normalization undone
+    so the result can be displayed."""
+    if processor is None:
+        processor = transformers.AutoImageProcessor.from_pretrained(config.model.id)
+    transforms, processor_opts = preprocessing(config, processor)
+    if transforms is not None:
+        images = [transforms(img) for img in images]
+    pixels = processor(images, return_tensors="pt", **processor_opts)["pixel_values"]
+    if getattr(processor, "do_normalize", False):
+        mean = torch.tensor(processor.image_mean).view(1, -1, 1, 1)
+        std = torch.tensor(processor.image_std).view(1, -1, 1, 1)
+        pixels = pixels * std + mean
+    elif not getattr(processor, "do_rescale", True):
+        pixels = pixels / 255
+    pixels = pixels.clamp(0, 1)
+    return [v2.functional.to_pil_image(p) for p in pixels]
+
+
 def extract_img_features(
     img_dataset: ImageDataset, config: EmbeddingConfig
 ) -> pl.DataFrame:
@@ -127,23 +169,7 @@ def extract_img_features(
     hf_logger = logging.getLogger("transformers.modeling_utils")
     load_filter = ExpectedUnexpectedKeysFilter(model.ignore_unexpected)
 
-    transforms = None
-    transform_ops = []
-    # additional options to pass to the processor
-    processor_opts = {}
-    if config.center_crop is not None:
-        # Many processors (e.g. DINOv2, CLIP, ResNet) also resize and center crop,
-        # which would crop the custom crop further. Output the custom crop at the
-        # model input size and disable the processor's resizing and cropping.
-        transform_ops.append(
-            CenterCropPercent(config.center_crop, model_input_size(processor))
-        )
-        processor_opts = {"do_resize": False, "do_center_crop": False}
-    if config.grayscale:
-        transform_ops.append(v2.Grayscale())
-
-    if transform_ops:
-        transforms = v2.Compose(transform_ops)
+    transforms, processor_opts = preprocessing(config, processor)
 
     if model.ignore_unexpected:
         hf_logger.addFilter(load_filter)
