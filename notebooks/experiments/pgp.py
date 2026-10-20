@@ -128,10 +128,18 @@ def _(image_meta_df, pgp_meta_df, pl):
     # PGP document info attached by shelfmark
     _img = image_meta_df.select("image_path", "shelfmark").unique()
     _docs = (
-        pgp_meta_df.group_by("shelfmark")
+        pgp_meta_df.with_columns(
+            # tags are a comma-separated string per document
+            _tags=pl.col.tags.str.split(",").list.eval(
+                pl.element().str.strip_chars().filter(pl.element() != "")
+            )
+        )
+        .group_by("shelfmark")
         .agg(
             pl.col.pgpid.unique().sort().alias("pgpids"),
             pl.col.type.drop_nulls().unique().sort().alias("doc_types"),
+            # PGP tags combined across documents
+            pl.col._tags.explode().drop_nulls().unique().sort().alias("tags"),
         )
         .with_columns(doc_type=pl.col.doc_types.list.join(", "))
     )
@@ -184,13 +192,28 @@ def _(image_info_df, img_dataset, mo, pl):
         allow_select_none=True,
         label="Document type",
     )
+    # optional keyword filter on PGP tags (searchable); images match if any of
+    # their documents has any of the selected tags
+    _tag_counts = (
+        image_info_df.select(pl.col.tags.explode().alias("tag"))
+        .drop_nulls()
+        .group_by("tag")
+        .len()
+        .sort("tag")
+    )
+    tag_select = mo.ui.multiselect(
+        options={f"{_t} ({_n:,})": _t for _t, _n in _tag_counts.iter_rows()},
+        label="Keywords",
+    )
     # displayed with thumbnail status by the thumbnail cell
     controls_ui = mo.vstack(
         [
             mo.hstack(
                 [embedding_select, n_sample, canvas_w, canvas_h], justify="start"
             ),
-            mo.hstack([doc_type_select, show_thumbs, thumb_px], justify="start"),
+            mo.hstack(
+                [doc_type_select, tag_select, show_thumbs, thumb_px], justify="start"
+            ),
         ]
     )
     return (
@@ -201,6 +224,7 @@ def _(image_info_df, img_dataset, mo, pl):
         embedding_select,
         n_sample,
         show_thumbs,
+        tag_select,
         thumb_px,
     )
 
@@ -258,18 +282,25 @@ def _(umap_meta_df):
 
 
 @app.cell
-def _(doc_type_select, mo, n_sample, np, pl, umap_meta_df):
+def _(doc_type_select, mo, n_sample, np, pl, tag_select, umap_meta_df):
     # sample after loading, so umap coords cover all images (as in generate_mosaic)
     _df = umap_meta_df
     if doc_type_select.value:
         _df = _df.filter(pl.col.doc_types.list.contains(doc_type_select.value))
+    if tag_select.value:
+        _df = _df.filter(
+            pl.col.tags.list.set_intersection(tag_select.value).list.len() > 0
+        )
     sample_df = _df.sample(min(n_sample.value, _df.height))
     coords = sample_df["umap"].to_numpy().astype(np.float32)
     paths = sample_df["image_path"].to_list()
     # same rule as generate_mosaic: most common aspect ratio in the data
     img_aspect = float(sample_df["aspect_ratio"].mode()[0])
+    _filters = ([doc_type_select.value] if doc_type_select.value else []) + list(
+        tag_select.value
+    )
     mo.md(
-        f"**{len(coords)}** of {_df.height} images{f' ({doc_type_select.value})' if doc_type_select.value else ''}, image aspect ratio {img_aspect:.2f}"
+        f"**{len(coords)}** of {_df.height} images{f' ({", ".join(_filters)})' if _filters else ''}, image aspect ratio {img_aspect:.2f}"
     )
     return coords, img_aspect, paths, sample_df
 
