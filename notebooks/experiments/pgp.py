@@ -903,12 +903,21 @@ def _(nn_features, nn_image_df, nn_k, nn_model_picker, nn_query_idx, np, pl):
 @app.cell
 def _(html, mo, nn_models, nn_neighbors, nn_show_captions, nn_thumb_size):
     # compact grid: one row per model config, label on the left, neighbors
-    # packed tightly; rank + similarity overlaid on each thumbnail
+    # packed tightly; rank + similarity overlaid on each thumbnail.
+    # Images returned by more than one model get a count badge, and hovering
+    # one highlights every copy across the rows.
     def _label(name):
         _config = nn_models[name]
         return f"<div class='nn-model'>{_config.model.name}</div>" + "".join(
             f"<div class='nn-opt'>{_o}</div>" for _o in _config.option_labels
         )
+
+    # models returning each image (only images shared by 2+ models)
+    _returned_by = {}
+    for _name, _df in nn_neighbors.items():
+        for _idx in _df["idx"]:
+            _returned_by.setdefault(_idx, []).append(_name)
+    _shared = {_i: _m for _i, _m in _returned_by.items() if len(_m) > 1}
 
     def _thumb(row):
         _img = mo.image(
@@ -924,12 +933,25 @@ def _(html, mo, nn_models, nn_neighbors, nn_show_captions, nn_thumb_size):
             if nn_show_captions.value
             else ""
         )
-        return f"<div class='nn-thumb' title='{html.escape(image_label(row), quote=True)}'>{_img}{_cap}</div>"
+        _title = image_label(row)
+        _models = _shared.get(row["idx"])
+        _badge = f"<span class='nn-count'>×{len(_models)}</span>" if _models else ""
+        return (
+            f"<div class='nn-thumb' data-idx='{row['idx']}' "
+            f"title='{html.escape(_title, quote=True)}'>{_img}{_cap}{_badge}</div>"
+        )
 
     _rows = "".join(
         f"<div class='nn-label'>{_label(_name)}</div>"
         f"<div class='nn-imgs'>{''.join(_thumb(r) for r in _df.iter_rows(named=True))}</div>"
         for _name, _df in nn_neighbors.items()
+    )
+    # hover highlighting in plain CSS: while any copy of a shared image is
+    # hovered, outline all copies and dim everything else
+    _hover_css = "\n".join(
+        f".nn-grid:has(.nn-thumb[data-idx='{_i}']:hover) .nn-thumb[data-idx='{_i}']"
+        " { outline: 3px solid #ff7f0e; outline-offset: -3px; opacity: 1; }"
+        for _i in _shared
     )
     # displayed with the controls, below
     nn_results_grid = mo.Html(
@@ -941,10 +963,16 @@ def _(html, mo, nn_models, nn_neighbors, nn_show_captions, nn_thumb_size):
           .nn-model {{ font-weight: 600; }}
           .nn-opt {{ font-size: 0.7rem; opacity: 0.7; }}
           .nn-imgs {{ display: flex; gap: 2px; overflow-x: auto; }}
-          .nn-thumb {{ position: relative; flex: none; }}
+          .nn-thumb {{ position: relative; flex: none; transition: opacity 0.1s; }}
           .nn-thumb img {{ margin: 0; }}
           .nn-cap {{ position: absolute; left: 0; bottom: 0; padding: 0 3px;
             font-size: 0.6rem; color: white; background: rgba(0, 0, 0, 0.55); }}
+          .nn-count {{ position: absolute; right: 2px; top: 2px; padding: 0 4px;
+            border-radius: 8px; font-size: 0.65rem; font-weight: 600;
+            color: white; background: #ff7f0e; }}
+          .nn-grid:has(.nn-thumb[data-idx]:hover) .nn-thumb {{ opacity: 0.35; }}
+          .nn-thumb:hover {{ opacity: 1 !important; }}
+          {_hover_css}
         </style>
         <div class="nn-grid">{_rows}</div>
         """
@@ -996,6 +1024,27 @@ def _(
             ),
         ]
     )
+    # how to read a thumbnail: a mock thumbnail with the same caption and
+    # badge styles as the results grid
+    _legend = mo.Html(
+        """
+        <div style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; line-height:1.3;">
+          <div style="position:relative; width:64px; height:44px; flex:none;
+              background:repeating-linear-gradient(45deg, #ccc 0 6px, #ddd 6px 12px);
+              border-radius:2px;">
+            <span style="position:absolute; left:0; bottom:0; padding:0 3px; font-size:0.6rem;
+                color:white; background:rgba(0,0,0,0.55);">#2 · 0.913</span>
+            <span style="position:absolute; right:2px; top:2px; padding:0 4px; border-radius:8px;
+                font-size:0.65rem; font-weight:600; color:white; background:#ff7f0e;">×3</span>
+          </div>
+          <div>
+            <b>#2</b> rank · <b>0.913</b> cosine similarity to the starting image<br>
+            <span style="color:#ff7f0e; font-weight:600;">×3</span> returned by 3 of the shown models;
+            hover to outline every copy
+          </div>
+        </div>
+        """
+    )
     if nn_query_idx is None:
         _query = mo.callout(mo.md("No images match the filters."), kind="warn")
     else:
@@ -1026,7 +1075,7 @@ def _(
             _filter_ui,
             # display controls in one row, to leave vertical space for results
             mo.hstack(
-                [nn_random_button, nn_k, nn_thumb_size, nn_show_captions],
+                [nn_random_button, nn_k, nn_thumb_size, nn_show_captions, _legend],
                 justify="start",
                 align="center",
                 gap=2,
