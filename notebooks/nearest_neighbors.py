@@ -8,6 +8,7 @@
 #     "polars==2.0.0",
 #     "anywidget==0.11.0",
 #     "traitlets==5.16.1",
+#     "pillow==12.3.0",
 # ]
 #
 # [tool.uv.sources]
@@ -28,6 +29,7 @@ app = marimo.App(width="full")
 
 @app.cell
 def _():
+    import io
     import random
     from pathlib import Path
 
@@ -37,12 +39,27 @@ def _():
     import marimo as mo
     import numpy as np
     import polars as pl
+    from PIL import Image, ImageDraw, ImageFont
 
     from iconoscope.dataset import ImageDataset
 
     # background points are sampled/capped in the plotting cell
     alt.data_transformers.disable_max_rows()
-    return ImageDataset, Path, alt, anywidget, mo, np, pl, random, traitlets
+    return (
+        Image,
+        ImageDataset,
+        ImageDraw,
+        ImageFont,
+        Path,
+        alt,
+        anywidget,
+        io,
+        mo,
+        np,
+        pl,
+        random,
+        traitlets,
+    )
 
 
 @app.cell
@@ -79,7 +96,7 @@ def _(ImageDataset, Path, dataset_path, mo):
     # model + preprocessing configs with stored features, keyed by label;
     # sorted by model name, with default preprocessing first
     models = {
-        f"{config.model.name}/{config.key}": config
+        config.label: config
         for config in sorted(
             dataset.get_configs(),
             key=lambda c: (c.model.name, c.key != "defaults", c.key),
@@ -203,15 +220,7 @@ def _(ModelPicker, info, mo, models):
         return {
             "model": config.model.name,
             # one badge per set option (key can't be split on "_": center_crop)
-            "options": [
-                _opt
-                if _val is True
-                else f"{_opt}={_val:g}"
-                if isinstance(_val, float)
-                else f"{_opt}={_val}"
-                for _opt, _val in config.opts.items()
-                if _val is not None and _val is not False
-            ],
+            "options": config.option_labels,
             "meta": " · ".join(_meta),
         }
 
@@ -368,15 +377,7 @@ def _(mo, models, neighbors, show_captions, thumb_size):
     # packed tightly; rank + similarity overlaid on each thumbnail
     def _label(name):
         _config = models[name]
-        _opts = [
-            _opt
-            if _val is True
-            else f"{_opt}={_val:g}"
-            if isinstance(_val, float)
-            else f"{_opt}={_val}"
-            for _opt, _val in _config.opts.items()
-            if _val is not None and _val is not False
-        ]
+        _opts = _config.option_labels
         return f"<div class='nn-model'>{_config.model.name}</div>" + "".join(
             f"<div class='nn-opt'>{_o}</div>" for _o in _opts
         )
@@ -617,6 +618,170 @@ def _(alt, pl, selected_models, umap_df):
         ],
     ).properties(
         width=600, height=200, title="How tightly do neighbors cluster in UMAP?"
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## Export knn comparison
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    export_height = mo.ui.slider(
+        100, 600, value=240, step=20, label="Export row height (px)", show_value=True
+    )
+    export_bg = mo.ui.radio(
+        options=["white", "black", "transparent"],
+        value="white",
+        label="Background",
+        inline=True,
+    )
+    return export_bg, export_height
+
+
+@app.cell(hide_code=True)
+def _(
+    Image,
+    ImageDraw,
+    ImageFont,
+    Path,
+    export_bg,
+    export_height,
+    io,
+    k_slider,
+    mo,
+    models,
+    neighbors,
+    query_path,
+    selected_models,
+    show_captions,
+):
+    # still image of the knn comparison: one row per selected model config —
+    # query image (once) | label | neighbors — rendered with PIL at export resolution
+    def _row_thumb(path, height):
+        """Open an image and scale to the given height, preserving aspect ratio."""
+        with Image.open(path) as _img:
+            _img = _img.convert("RGB")
+            _w = max(1, round(_img.width * height / _img.height))
+            return _img.resize((_w, height), Image.LANCZOS)
+
+    def _caption(img, text, font, pad):
+        """Draw a caption on a translucent box in the bottom-left corner."""
+        _overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        _draw = ImageDraw.Draw(_overlay)
+        _l, _t, _r, _b = _draw.textbbox((0, 0), text, font=font)
+        _box_h = _b - _t + 2 * pad
+        _draw.rectangle(
+            [0, img.height - _box_h, _r - _l + 2 * pad, img.height], fill=(0, 0, 0, 140)
+        )
+        _draw.text(
+            (pad - _l, img.height - _box_h + pad - _t), text, font=font, fill="white"
+        )
+        return Image.alpha_composite(img.convert("RGBA"), _overlay).convert("RGB")
+
+    def render_knn_comparison(height, background="white"):
+        # transparent background uses dark text
+        _fg = "white" if background == "black" else "black"
+        _gap = max(2, height // 60)  # between images
+        _pad = max(4, height // 40)  # around the canvas / caption padding
+        _sep = _gap * 4  # between query image and neighbors
+        _font_model = ImageFont.load_default(size=max(12, height // 10))
+        _font_opt = ImageFont.load_default(size=max(10, height // 14))
+        _font_cap = ImageFont.load_default(size=max(9, height // 16))
+
+        _query = _row_thumb(query_path, height)
+        _query = _caption(_query, "query", _font_cap, _gap)
+
+        _rows = []
+        for _name in selected_models:
+            _config = models[_name]
+            _opts = _config.option_labels
+            _thumbs = []
+            for _r in neighbors[_name].iter_rows(named=True):
+                _t = _row_thumb(_r["image_path"], height)
+                if show_captions.value:
+                    _t = _caption(
+                        _t, f"#{_r['rank']} · {_r['similarity']:.3f}", _font_cap, _gap
+                    )
+                _thumbs.append(_t)
+            _rows.append(
+                (
+                    [(_config.model.name, _font_model)]
+                    + [(_o, _font_opt) for _o in _opts],
+                    _thumbs,
+                )
+            )
+
+        # label column width: widest label line across all rows
+        _measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        _label_w = max(
+            _measure.textlength(_text, font=_font)
+            for _lines, _ in _rows
+            for _text, _font in _lines
+        )
+        _label_w = int(_label_w) + 2 * _pad
+        _rows_h = len(_rows) * (height + _gap) - _gap
+        _row_w = [
+            sum(_t.width for _t in _thumbs) + _gap * (len(_thumbs) - 1)
+            for _, _thumbs in _rows
+        ]
+        # layout: query (once, vertically centered) | labels | neighbor rows
+        _rows_x = _pad + _query.width + _sep + _label_w
+        _canvas = Image.new(
+            "RGBA" if background == "transparent" else "RGB",
+            (_rows_x + max(_row_w) + _pad, max(_rows_h, _query.height) + 2 * _pad),
+            (0, 0, 0, 0) if background == "transparent" else background,
+        )
+        _draw = ImageDraw.Draw(_canvas)
+        _canvas.paste(_query, (_pad, (_canvas.height - _query.height) // 2))
+        _top = (_canvas.height - _rows_h) // 2
+        for _i, (_lines, _thumbs) in enumerate(_rows):
+            _y = _top + _i * (height + _gap)
+            # right-aligned label, vertically centered on the row
+            _heights = [_font.size * 1.25 for _, _font in _lines]
+            _ty = _y + (height - sum(_heights)) / 2
+            for (_text, _font), _h in zip(_lines, _heights):
+                _tw = _draw.textlength(_text, font=_font)
+                _draw.text((_rows_x - _pad - _tw, _ty), _text, font=_font, fill=_fg)
+                _ty += _h
+            _x = _rows_x
+            for _t in _thumbs:
+                _canvas.paste(_t, (_x, _y))
+                _x += _t.width + _gap
+        return _canvas
+
+    knn_image = render_knn_comparison(export_height.value, export_bg.value)
+    _buf = io.BytesIO()
+    knn_image.save(_buf, format="PNG")
+    _stem = Path(query_path).stem
+    mo.vstack(
+        [
+            mo.hstack(
+                [
+                    export_height,
+                    export_bg,
+                    mo.download(
+                        _buf.getvalue(),
+                        filename=f"knn_{_stem}_k{k_slider.value}.png",
+                        mimetype="image/png",
+                        label="Download PNG",
+                    ),
+                    mo.md(f"{knn_image.width} × {knn_image.height} px").style(
+                        {"font-size": "0.8em", "opacity": "0.7"}
+                    ),
+                ],
+                justify="start",
+                align="center",
+                gap=2,
+            ),
+            mo.image(_buf.getvalue(), style={"max-width": "100%", "height": "auto"}),
+        ],
+        align="start",
     )
     return
 
