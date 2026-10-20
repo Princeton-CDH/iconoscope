@@ -13,6 +13,7 @@ def _():
 
     import marimo as mo
     import numpy as np
+    import polars as pl
     from PIL import Image, ImageOps
     from wigglystuff import ObservablePlot
 
@@ -39,6 +40,7 @@ def _():
         layout_mosaic,
         mo,
         np,
+        pl,
     )
 
 
@@ -52,15 +54,86 @@ def _(ImageDataset, Path):
 
 
 @app.cell
-def _(img_dataset):
-    img_dataset.get_configs()
+def _():
+    # TODO: summarize info and make readable for users
+    # img_dataset.info()
     return
 
 
 @app.cell
-def _(img_dataset):
-    img_dataset.info()
+def _(pl):
+    # load metadata
+    # TODO: this csv changes structure part way through and is not all of the files
+    # also -- redundancy?
+    image_meta_df = pl.read_csv(
+        "/Users/rkoeser/workarea/experiments/20260608-pgp-vislab/image_meta.csv"
+    )
+
+    # fix it for now
+    image_meta_df = (
+        image_meta_df.with_columns(
+            real_path=pl.when(pl.col.image_path.str.starts_with("data/pgp-"))
+            .then(pl.col.image_path)
+            .otherwise(pl.col.shelfmark),
+            real_shelfmark=pl.when(pl.col.image_path.str.starts_with("data/pgp-"))
+            .then(pl.col.shelfmark)
+            .otherwise(pl.col.image_path),
+        )
+        .drop("image_path", "shelfmark")
+        .rename({"real_path": "image_path", "real_shelfmark": "shelfmark"})
+    )
+
+    image_meta_df
+    return (image_meta_df,)
+
+
+@app.cell
+def _(image_meta_df):
+    image_meta_df["keyword"].value_counts()
     return
+
+
+@app.cell
+def _(image_meta_df):
+    image_meta_df["type"].value_counts()
+    return
+
+
+@app.cell
+def _(pl):
+    pgp_meta_df = pl.read_csv(
+        "/Users/rkoeser/workarea/github/pgp-metadata/data/documents.csv"
+    )
+    # split and explode on shelfmark so we get one row per document+shelfmark combination
+    pgp_meta_df = (
+        pgp_meta_df.with_columns(shelfmark_list=pl.col.shelfmark.str.split(" + "))
+        .explode("shelfmark_list")
+        .rename({"shelfmark": "shelfmark_orig", "shelfmark_list": "shelfmark"})
+    )
+    pgp_meta_df
+    return (pgp_meta_df,)
+
+
+@app.cell
+def _(image_meta_df, pgp_meta_df):
+    # TODO: not sure how this handles shelfmarks associated with multiple documents
+    pgp_image_meta_df = image_meta_df.join(pgp_meta_df, on="shelfmark")
+    pgp_image_meta_df
+    return
+
+
+@app.cell
+def _(image_meta_df, pgp_meta_df, pl):
+    # one row per image (image_meta lists some images more than once), with
+    # PGP document info attached by shelfmark
+    _img = image_meta_df.select("image_path", "shelfmark").unique()
+    _docs = pgp_meta_df.group_by("shelfmark").agg(
+        pl.col.pgpid.unique().sort().alias("pgpids"),
+        pl.col.type.drop_nulls().unique().sort().str.join(", ").alias("doc_type"),
+    )
+    image_info_df = _img.join(_docs, on="shelfmark", how="left")
+    image_info_df
+    return (image_info_df,)
 
 
 @app.cell(hide_code=True)
@@ -132,9 +205,37 @@ def _(embedding_select, img_dataset, mo):
 
 
 @app.cell
-def _(mo, n_sample, np, umap_df):
+def _(image_info_df, mo, pl, umap_df):
+    # attach metadata to dataset images; dataset paths are absolute, metadata
+    # paths are relative to the experiment dir (data/pgp-images/...)
+    umap_meta_df = (
+        umap_df.with_columns(
+            _rel_path=pl.col.image_path.str.extract(r"(data/pgp-images/.*)$")
+        )
+        .join(
+            image_info_df.rename({"image_path": "_rel_path"}),
+            on="_rel_path",
+            how="left",
+        )
+        .drop("_rel_path")
+    )
+    mo.md(
+        f"Metadata found for **{umap_meta_df['shelfmark'].is_not_null().sum()}** of {umap_meta_df.height} images; "
+        f"PGP document match for **{umap_meta_df['pgpids'].is_not_null().sum()}**"
+    )
+    return (umap_meta_df,)
+
+
+@app.cell
+def _(umap_meta_df):
+    umap_meta_df
+    return
+
+
+@app.cell
+def _(mo, n_sample, np, umap_df, umap_meta_df):
     # sample after loading, so umap coords cover all images (as in generate_mosaic)
-    sample_df = umap_df.sample(min(n_sample.value, umap_df.height))
+    sample_df = umap_meta_df.sample(min(n_sample.value, umap_meta_df.height))
     coords = sample_df["umap"].to_numpy().astype(np.float32)
     paths = sample_df["image_path"].to_list()
     # same rule as generate_mosaic: most common aspect ratio in the data
@@ -142,7 +243,7 @@ def _(mo, n_sample, np, umap_df):
     mo.md(
         f"**{len(coords)}** of {umap_df.height} images, image aspect ratio {img_aspect:.2f}"
     )
-    return coords, img_aspect, paths
+    return coords, img_aspect, paths, sample_df
 
 
 @app.cell
@@ -220,12 +321,26 @@ def _(canvas_h, canvas_w, coords, img_aspect, layout_mosaic, np):
 
 
 @app.cell
-def _(Path, coords, dest, np, paths, placed, scale, thumbs):
+def _(coords, dest, np, placed, sample_df, scale, thumbs):
     # one record per placed image: start (sx, sy), end (dx, dy), color, optional img
     _idx = np.flatnonzero(placed)
     _src = coords[_idx] * scale
     _dst = dest[_idx]
     _c = coords[_idx]
+    _meta = sample_df.select("shelfmark", "pgpids", "doc_type").to_dicts()
+
+    def _label(i):
+        """hover text: whatever document metadata is available"""
+        _m = _meta[i]
+        _lines = []
+        if _m["shelfmark"]:
+            _lines.append(_m["shelfmark"])
+        if _m["pgpids"]:
+            _lines.append("PGPID " + ", ".join(str(_p) for _p in _m["pgpids"]))
+        if _m["doc_type"]:
+            _lines.append(_m["doc_type"])
+        return "\n".join(_lines)
+
     points = [
         {
             "sx": float(_src[k, 0]),
@@ -239,7 +354,7 @@ def _(Path, coords, dest, np, paths, placed, scale, thumbs):
                 int(255 * _c[k, 1]),
             ),
             "img": thumbs[i] if thumbs else None,
-            "label": Path(paths[i]).name,
+            "label": _label(i),
         }
         for k, i in enumerate(_idx)
     ]
