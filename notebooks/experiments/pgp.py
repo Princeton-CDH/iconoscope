@@ -331,6 +331,39 @@ def image_label(meta):
 
 
 @app.cell
+def _(pgp_meta_df, pl):
+    def document_links_md(meta, max_chars=240):
+        """Markdown for an image's shelfmark and its PGP documents: link to each
+        document page, type, and the start of its description"""
+        _docs = (
+            pgp_meta_df.filter(pl.col.pgpid.is_in(meta.get("pgpids") or []))
+            .unique("pgpid")
+            .sort("pgpid")
+        )
+        _items = []
+        for _d in _docs.iter_rows(named=True):
+            _item = f"- [PGPID {_d['pgpid']}]({_d['url']})"
+            if _d["type"]:
+                _item += f" · {_d['type']}"
+            if _d["description"]:
+                _desc = _d["description"]
+                _item += (
+                    f"  \n  {_desc[:max_chars]}{'…' if len(_desc) > max_chars else ''}"
+                )
+            _items.append(_item)
+        _head = f"**{meta.get('shelfmark') or 'No shelfmark match'}**"
+        if meta.get("doc_type"):
+            _head += f" · {meta['doc_type']}"
+        return (
+            _head
+            + "\n\n"
+            + ("\n".join(_items) if _items else "*No linked PGP documents.*")
+        )
+
+    return (document_links_md,)
+
+
+@app.cell
 def _(embedding_select, img_dataset, mo):
     # umap is generated (and saved) on first load for this config
     with mo.status.spinner(f"Loading {embedding_select.selected_key}"):
@@ -1091,13 +1124,13 @@ def _(
 
 @app.cell
 def _(
+    document_links_md,
     mo,
     nn_grid,
     nn_image_df,
     nn_neighbors,
     nn_set_start,
     nn_start_token,
-    pgp_meta_df,
     pl,
 ):
     # details + external links for the image clicked in the results grid
@@ -1108,21 +1141,6 @@ def _(
         )
     else:
         _row = nn_image_df.row(_sel, named=True)
-        # PGP documents on this image's shelfmark
-        _docs = (
-            pgp_meta_df.filter(pl.col.pgpid.is_in(_row["pgpids"] or []))
-            .unique("pgpid")
-            .sort("pgpid")
-        )
-        _doc_md = [
-            f"- [PGPID {_d['pgpid']}]({_d['url']}){' · ' + _d['type'] if _d['type'] else ''}"
-            + (
-                f"  \n  {_d['description'][:240]}{'…' if len(_d['description']) > 240 else ''}"
-                if _d["description"]
-                else ""
-            )
-            for _d in _docs.iter_rows(named=True)
-        ]
         # rank of this image for each shown model
         _ranks = [
             f"{_name} #{_df.filter(pl.col.idx == _sel)['rank'][0]}"
@@ -1140,10 +1158,7 @@ def _(
                     style={"max-height": "300px", "max-width": "100%", "width": "auto"},
                 ),
                 mo.md(
-                    f"**{_row['shelfmark'] or 'No shelfmark match'}**"
-                    + (f" · {_row['doc_type']}" if _row["doc_type"] else "")
-                    + "\n\n"
-                    + ("\n".join(_doc_md) if _doc_md else "*No linked PGP documents.*")
+                    document_links_md(_row)
                     + "\n\n"
                     + f"<small>Ranked by: {', '.join(_ranks)}</small>"
                 ).style({"font-size": "0.85em"}),
@@ -1156,6 +1171,7 @@ def _(
 
 @app.cell
 def _(
+    document_links_md,
     mo,
     nn_candidates,
     nn_description_search,
@@ -1223,9 +1239,9 @@ def _(
     if nn_query_idx is None:
         _query = mo.callout(mo.md("No images match the filters."), kind="warn")
     else:
-        _query_label = image_label(nn_image_df.row(nn_query_idx, named=True))
         _query = mo.vstack(
             [
+                mo.md("**Starting image**"),
                 mo.image(
                     nn_query_path,
                     style={
@@ -1235,9 +1251,10 @@ def _(
                         "object-fit": "contain",
                     },
                 ),
-                mo.md("  \n".join(_query_label.splitlines())).style(
-                    {"font-size": "0.85em"}
-                ),
+                # same document details + links as the results panel
+                mo.md(
+                    document_links_md(nn_image_df.row(nn_query_idx, named=True))
+                ).style({"font-size": "0.85em"}),
             ],
             align="start",
         )
