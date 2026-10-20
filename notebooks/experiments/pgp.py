@@ -127,9 +127,13 @@ def _(image_meta_df, pgp_meta_df, pl):
     # one row per image (image_meta lists some images more than once), with
     # PGP document info attached by shelfmark
     _img = image_meta_df.select("image_path", "shelfmark").unique()
-    _docs = pgp_meta_df.group_by("shelfmark").agg(
-        pl.col.pgpid.unique().sort().alias("pgpids"),
-        pl.col.type.drop_nulls().unique().sort().str.join(", ").alias("doc_type"),
+    _docs = (
+        pgp_meta_df.group_by("shelfmark")
+        .agg(
+            pl.col.pgpid.unique().sort().alias("pgpids"),
+            pl.col.type.drop_nulls().unique().sort().alias("doc_types"),
+        )
+        .with_columns(doc_type=pl.col.doc_types.list.join(", "))
     )
     image_info_df = _img.join(_docs, on="shelfmark", how="left")
     image_info_df
@@ -145,17 +149,11 @@ def _(mo):
 
 
 @app.cell
-def _(img_dataset, mo):
+def _(image_info_df, img_dataset, mo, pl):
     _configs = img_dataset.configs_by_label()
     embedding_select = mo.ui.dropdown(
         options=_configs, value=list(_configs.keys())[0], label="Embedding"
     )
-    embedding_select
-    return (embedding_select,)
-
-
-@app.cell
-def _(mo):
     n_sample = mo.ui.slider(
         20, 1000, value=150, step=10, label="Sample size", show_value=True
     )
@@ -170,14 +168,41 @@ def _(mo):
     thumb_px = mo.ui.slider(
         16, 512, value=128, step=16, label="Thumbnail size (px)", show_value=True
     )
+    # optional document type filter; images whose shelfmark is associated with
+    # several documents match if any of them has the selected type
+    # options only include types present in the image data, labeled with image counts
+    _doc_type_counts = (
+        image_info_df.select(pl.col.doc_types.explode().alias("doc_type"))
+        .drop_nulls()
+        .group_by("doc_type")
+        .len()
+        .sort("doc_type")
+    )
+    doc_type_select = mo.ui.dropdown(
+        options={f"{_t} ({_n:,})": _t for _t, _n in _doc_type_counts.iter_rows()},
+        value=None,
+        allow_select_none=True,
+        label="Document type",
+    )
     # displayed with thumbnail status by the thumbnail cell
     controls_ui = mo.vstack(
         [
-            mo.hstack([n_sample, canvas_w, canvas_h], justify="start"),
-            mo.hstack([show_thumbs, thumb_px], justify="start"),
+            mo.hstack(
+                [embedding_select, n_sample, canvas_w, canvas_h], justify="start"
+            ),
+            mo.hstack([doc_type_select, show_thumbs, thumb_px], justify="start"),
         ]
     )
-    return canvas_h, canvas_w, controls_ui, n_sample, show_thumbs, thumb_px
+    return (
+        canvas_h,
+        canvas_w,
+        controls_ui,
+        doc_type_select,
+        embedding_select,
+        n_sample,
+        show_thumbs,
+        thumb_px,
+    )
 
 
 @app.cell
@@ -233,15 +258,18 @@ def _(umap_meta_df):
 
 
 @app.cell
-def _(mo, n_sample, np, umap_df, umap_meta_df):
+def _(doc_type_select, mo, n_sample, np, pl, umap_meta_df):
     # sample after loading, so umap coords cover all images (as in generate_mosaic)
-    sample_df = umap_meta_df.sample(min(n_sample.value, umap_meta_df.height))
+    _df = umap_meta_df
+    if doc_type_select.value:
+        _df = _df.filter(pl.col.doc_types.list.contains(doc_type_select.value))
+    sample_df = _df.sample(min(n_sample.value, _df.height))
     coords = sample_df["umap"].to_numpy().astype(np.float32)
     paths = sample_df["image_path"].to_list()
     # same rule as generate_mosaic: most common aspect ratio in the data
     img_aspect = float(sample_df["aspect_ratio"].mode()[0])
     mo.md(
-        f"**{len(coords)}** of {umap_df.height} images, image aspect ratio {img_aspect:.2f}"
+        f"**{len(coords)}** of {_df.height} images{f' ({doc_type_select.value})' if doc_type_select.value else ''}, image aspect ratio {img_aspect:.2f}"
     )
     return coords, img_aspect, paths, sample_df
 
