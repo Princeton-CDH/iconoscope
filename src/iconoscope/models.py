@@ -45,10 +45,11 @@ class EmbeddingConfig:
         return {f: getattr(self, f) for f in self.option_names()}
 
     @cached_property
-    def key(self) -> str:
+    def option_labels(self) -> list[str]:
+        """One short label per set option, e.g. ``["center_crop=0.6", "grayscale"]``."""
         opt_labels = []
         for key, value in self.opts.items():
-            # if property is unset or False, omit from key
+            # if property is unset or False, omit
             if value is None or value is False:
                 continue
             # if property is boolean True, include property name only
@@ -60,9 +61,17 @@ class EmbeddingConfig:
                 if isinstance(value, float):
                     value = f"{value:g}"
                 opt_labels.append(f"{key}={value}")
+        return opt_labels
 
+    @cached_property
+    def key(self) -> str:
         # if no customization, return "defaults"
-        return "_".join(opt_labels) or "defaults"
+        return "_".join(self.option_labels) or "defaults"
+
+    @property
+    def label(self) -> str:
+        """Display label: ``model/key``."""
+        return f"{self.model.name}/{self.key}"
 
 
 _models = [
@@ -77,6 +86,7 @@ _models = [
         "google/siglip-base-patch16-224",
         768,
         hf_model_class="SiglipVisionModel",
+        ignore_unexpected=("text_model.", "logit_bias", "logit_scale"),
     ),
     # CLIP vision tower only; the checkpoint also contains the text tower and
     # projection layers, which are unused here.
