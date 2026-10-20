@@ -627,3 +627,8 @@ def test_save_features_stores_config_attrs(tmp_path: Path, tmp_image_dir: Path):
     configs = dataset.get_configs()
     assert set(configs) == {CONFIG, custom}
     assert all(isinstance(c.grayscale, bool) for c in configs)
+
+    # keyed by label, default preprocessing first
+    by_label = dataset.configs_by_label()
+    assert list(by_label) == [CONFIG.label, custom.label]
+    assert by_label[custom.label] == custom

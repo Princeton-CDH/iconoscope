@@ -95,13 +95,7 @@ def _(ImageDataset, Path, dataset_path, mo):
     info = dataset.info()
     # model + preprocessing configs with stored features, keyed by label;
     # sorted by model name, with default preprocessing first
-    models = {
-        config.label: config
-        for config in sorted(
-            dataset.get_configs(),
-            key=lambda c: (c.model.name, c.key != "defaults", c.key),
-        )
-    }
+    models = dataset.configs_by_label()
     mo.stop(
         not models,
         mo.callout(

@@ -99,13 +99,7 @@ def _(DEFAULT_MODEL, ImageDataset, Path, dataset_path, mo):
     if dataset_path.value.strip():
         mo.stop(not _path.is_file(), mo.md(f"**Dataset not found:** `{_path}`"))
         dataset = ImageDataset(storage_path=_path)
-        _configs = {
-            c.label: c
-            for c in sorted(
-                dataset.get_configs(),
-                key=lambda c: (c.model.name, c.key != "defaults", c.key),
-            )
-        }
+        _configs = dataset.configs_by_label()
         mo.stop(not _configs, mo.md("**No embedding features found in this dataset.**"))
         # default model with default preprocessing if present, else first
         _default = next(

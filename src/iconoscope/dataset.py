@@ -505,6 +505,17 @@ class ImageDataset(IterableDataset):
                     configs.append(EmbeddingConfig(model, **opts))
         return configs
 
+    def configs_by_label(self) -> dict[str, EmbeddingConfig]:
+        """Stored embedding configurations keyed by display label
+        (``model/key``), sorted by model name with default preprocessing first."""
+        return {
+            config.label: config
+            for config in sorted(
+                self.get_configs(),
+                key=lambda c: (c.model.name, c.key != "defaults", c.key),
+            )
+        }
+
     def get_image_data(self) -> pl.DataFrame:
         return self.load_data()  # images paths only by default
 
