@@ -161,7 +161,13 @@ def _(image_meta_df, pgp_meta_df, pl):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## umap/mosaic
+    ## Plot images with UMAP (sparse or grid)
+
+    Use the controls to select from the available vision models and pre-processing options and optionally filter the images by document type or keyword.  You can view a sample of the images in UMAP plot or grid.
+
+    Zoom in or pan around on the images to see in more detail; hover over an image to see the shelfmark it belongs to along with associated PGPID(s) and document types.
+
+    Click the full-screen arrows at the top right of the cell to expand the viewer and controls to use your entire screen.
     """)
     return
 
@@ -487,6 +493,16 @@ def _(
             umap_grid_widget,
         ]
     )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Similarity search
+
+    Use "nearest neighbors" search to find visually similar images across all available embeddings.
+    """)
     return
 
 
