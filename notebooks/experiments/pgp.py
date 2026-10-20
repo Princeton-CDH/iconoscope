@@ -9,6 +9,7 @@ def _():
     import base64
     import functools
     import io
+    import re
     from pathlib import Path
 
     import marimo as mo
@@ -18,7 +19,7 @@ def _():
     from wigglystuff import ObservablePlot
 
     from iconoscope.dataset import ImageDataset
-    from iconoscope.mosaic import layout_mosaic
+    from iconoscope.mosaic import layout_mosaic, render_mosaic
 
     # mosaic canvas size in pixels; 16:10, close to typical screens, so the plot
     # fills most of the screen in fullscreen
@@ -27,6 +28,11 @@ def _():
     # max on-screen size of the plot widget, in CSS pixels
     PLOT_MAX_WIDTH = 1400
     PLOT_HEIGHT = 900
+    # downloadable mosaic of the full filtered set: target cell width in px,
+    # with the canvas (16:10, like the plot) capped at MOSAIC_MAX_WIDTH
+    # (memory: ~3 bytes/px, so 16000 x 10000 is ~480 MB while rendering)
+    MOSAIC_CELL_WIDTH = 250
+    MOSAIC_MAX_WIDTH = 16000
     # thumbnail resolution (max width in px); high enough to stay sharp when
     # zoomed into the plot, but each image is embedded in the page
     THUMB_PX = 384
@@ -38,6 +44,8 @@ def _():
         Image,
         ImageDataset,
         ImageOps,
+        MOSAIC_CELL_WIDTH,
+        MOSAIC_MAX_WIDTH,
         ObservablePlot,
         PLOT_CHROME,
         PLOT_HEIGHT,
@@ -51,6 +59,8 @@ def _():
         mo,
         np,
         pl,
+        re,
+        render_mosaic,
     )
 
 
@@ -294,16 +304,19 @@ def _(
     umap_meta_df,
 ):
     # sample after loading, so umap coords cover all images (as in generate_mosaic)
-    _df = umap_meta_df
+    # images matching the current filters (all of them, not just the sample)
+    filtered_df = umap_meta_df
     if doc_type_select.value:
-        _df = _df.filter(pl.col.doc_types.list.contains(doc_type_select.value))
+        filtered_df = filtered_df.filter(
+            pl.col.doc_types.list.contains(doc_type_select.value)
+        )
     if tag_select.value:
-        _df = _df.filter(
+        filtered_df = filtered_df.filter(
             pl.col.tags.list.set_intersection(tag_select.value).list.len() > 0
         )
     # referencing resample_button reruns this cell (new random sample) on click
     resample_button.value
-    sample_df = _df.sample(min(n_sample.value, _df.height))
+    sample_df = filtered_df.sample(min(n_sample.value, filtered_df.height))
     coords = sample_df["umap"].to_numpy().astype(np.float32)
     paths = sample_df["image_path"].to_list()
     # same rule as generate_mosaic: most common aspect ratio in the data
@@ -312,8 +325,77 @@ def _(
         tag_select.value
     )
     # shown with the controls above the plot
-    sample_summary = f"**{len(coords)}** of {_df.height} images{f' ({", ".join(_filters)})' if _filters else ''}, image aspect ratio {img_aspect:.2f}"
-    return coords, img_aspect, paths, sample_df, sample_summary
+    sample_summary = f"**{len(coords)}** of {filtered_df.height} images{f' ({", ".join(_filters)})' if _filters else ''}, image aspect ratio {img_aspect:.2f}"
+    return coords, filtered_df, img_aspect, paths, sample_df, sample_summary
+
+
+@app.cell
+def _(
+    MOSAIC_CELL_WIDTH,
+    MOSAIC_MAX_WIDTH,
+    doc_type_select,
+    embedding_select,
+    filtered_df,
+    io,
+    mo,
+    np,
+    re,
+    render_mosaic,
+    tag_select,
+):
+    # download a grid mosaic of every image in the current filtered set, using
+    # the same layout and rendering as the mosaic command; generated on click
+    def _mosaic_jpeg():
+        _aspect = float(filtered_df["aspect_ratio"].mode()[0])
+        # canvas size for the target cell size, 16:10, capped at MOSAIC_MAX_WIDTH
+        _cell_area = MOSAIC_CELL_WIDTH * (MOSAIC_CELL_WIDTH / _aspect)
+        _width = min(
+            MOSAIC_MAX_WIDTH, round((filtered_df.height * _cell_area * 16 / 10) ** 0.5)
+        )
+        _canvas = render_mosaic(
+            filtered_df["image_path"].to_list(),
+            filtered_df["umap"].to_numpy().astype(np.float32),
+            _aspect,
+            _width,
+            round(_width * 10 / 16),
+        )
+        _buf = io.BytesIO()
+        _canvas.save(_buf, format="JPEG", quality=90)
+        return _buf.getvalue()
+
+    def _mosaic_filename():
+        _parts = ["mosaic", embedding_select.selected_key]
+        if doc_type_select.value:
+            _parts.append(doc_type_select.value)
+        _parts.extend(tag_select.value)
+        _parts.append(str(filtered_df.height))
+        return (
+            "_".join(re.sub(r"[^A-Za-z0-9.=-]+", "-", _p).strip("-") for _p in _parts)
+            + ".jpg"
+        )
+
+    # only for a filtered set; the full dataset is too large for one image
+    _filtered = bool(doc_type_select.value or tag_select.value)
+    _download_button = mo.download(
+        data=_mosaic_jpeg,
+        filename=_mosaic_filename,
+        mimetype="image/jpeg",
+        disabled=not _filtered,
+        label=f"Download mosaic ({filtered_df.height:,} images)",
+    )
+    # button, with a note beside it when disabled
+    mosaic_download = mo.hstack(
+        [_download_button]
+        + (
+            []
+            if _filtered
+            else [mo.md("*Filter by document type or keyword to download a mosaic*")]
+        ),
+        justify="start",
+        align="center",
+        gap=0.5,
+    )
+    return (mosaic_download,)
 
 
 @app.cell
@@ -413,6 +495,7 @@ def _(
     layout,
     mean_dist,
     mo,
+    mosaic_download,
     np,
     paths,
     placed,
@@ -489,7 +572,12 @@ def _(
     mo.vstack(
         [
             controls_ui,
-            mo.md(f"{sample_summary} · {_thumb_status}"),
+            mo.hstack(
+                [mo.md(f"{sample_summary} · {_thumb_status}"), mosaic_download],
+                justify="start",
+                align="center",
+                gap=2,
+            ),
             umap_grid_widget,
         ]
     )
