@@ -13,9 +13,11 @@ def _():
     import re
     from pathlib import Path
 
+    import anywidget
     import marimo as mo
     import numpy as np
     import polars as pl
+    import traitlets
     from PIL import Image, ImageOps
     from wigglystuff import ObservablePlot
 
@@ -53,6 +55,7 @@ def _():
         PLOT_MAX_WIDTH,
         Path,
         THUMB_PX,
+        anywidget,
         base64,
         functools,
         html,
@@ -63,6 +66,7 @@ def _():
         pl,
         re,
         render_mosaic,
+        traitlets,
     )
 
 
@@ -645,9 +649,6 @@ def _(mo):
 def _(doc_type_options, img_dataset, mo, tag_options):
     # all model + preprocessing configs with stored features, keyed by label
     nn_models = img_dataset.configs_by_label()
-    nn_model_select = mo.ui.multiselect(
-        options=list(nn_models), value=list(nn_models), label="Models"
-    )
     nn_random_button = mo.ui.button(
         label="Random image", value=0, on_click=lambda v: v + 1
     )
@@ -672,7 +673,6 @@ def _(doc_type_options, img_dataset, mo, tag_options):
         nn_description_search,
         nn_doc_type_select,
         nn_k,
-        nn_model_select,
         nn_models,
         nn_random_button,
         nn_shelfmark_search,
@@ -680,6 +680,129 @@ def _(doc_type_options, img_dataset, mo, tag_options):
         nn_tag_select,
         nn_thumb_size,
     )
+
+
+@app.cell(hide_code=True)
+def _(anywidget, traitlets):
+    # checklist widget adapted from ../nearest_neighbors.py
+    class ModelPicker(anywidget.AnyWidget):
+        """Checklist of model configs; check to show, drag (or use arrows) to reorder."""
+
+        _esm = """
+        function render({ model, el }) {
+          const list = document.createElement("ul");
+          list.className = "mp-list";
+          el.appendChild(list);
+          let dragFrom = null;
+
+          function commit(order, selected) {
+            model.set("order", order);
+            model.set("selected", selected);
+            model.save_changes();
+          }
+          function move(i, j) {
+            const order = [...model.get("order")];
+            if (j < 0 || j >= order.length) return;
+            const [item] = order.splice(i, 1);
+            order.splice(j, 0, item);
+            commit(order, model.get("selected"));
+          }
+          function draw() {
+            const items = model.get("items");
+            const order = model.get("order");
+            const selected = new Set(model.get("selected"));
+            list.replaceChildren();
+            order.forEach((label, i) => {
+              const info = items[label] || {};
+              const li = document.createElement("li");
+              li.className = "mp-row" + (selected.has(label) ? "" : " mp-off");
+              li.draggable = true;
+              li.innerHTML = `
+                <span class="mp-handle" title="drag to reorder">⋮⋮</span>
+                <input type="checkbox" ${selected.has(label) ? "checked" : ""}>
+                <span class="mp-model">${info.model ?? label}</span>
+                <span class="mp-opts">${(info.options || []).map(o => `<code>${o}</code>`).join(" ") || '<span class="mp-default">defaults</span>'}</span>
+                <span class="mp-meta">${info.meta ?? ""}</span>
+                <span class="mp-arrows">
+                  <button class="mp-up" ${i === 0 ? "disabled" : ""} title="move up">▲</button>
+                  <button class="mp-down" ${i === order.length - 1 ? "disabled" : ""} title="move down">▼</button>
+                </span>`;
+              li.querySelector("input").addEventListener("change", (e) => {
+                const sel = order.filter(l => l === label ? e.target.checked : selected.has(l));
+                commit(order, sel);
+              });
+              li.querySelector(".mp-up").addEventListener("click", () => move(i, i - 1));
+              li.querySelector(".mp-down").addEventListener("click", () => move(i, i + 1));
+              li.addEventListener("dragstart", (e) => { dragFrom = i; li.classList.add("mp-dragging"); e.dataTransfer.effectAllowed = "move"; });
+              li.addEventListener("dragend", () => { dragFrom = null; li.classList.remove("mp-dragging"); });
+              li.addEventListener("dragover", (e) => { e.preventDefault(); li.classList.add("mp-over"); });
+              li.addEventListener("dragleave", () => li.classList.remove("mp-over"));
+              li.addEventListener("drop", (e) => {
+                e.preventDefault(); li.classList.remove("mp-over");
+                if (dragFrom !== null && dragFrom !== i) move(dragFrom, i);
+              });
+              list.appendChild(li);
+            });
+          }
+          model.on("change:order", draw);
+          model.on("change:selected", draw);
+          model.on("change:items", draw);
+          draw();
+        }
+        export default { render };
+        """
+        _css = """
+        .mp-list { list-style: none; margin: 0; padding: 0; max-width: 720px; font-size: 0.9rem; }
+        .mp-row { display: grid; grid-template-columns: 1.2em 1.5em 6em 1fr auto auto;
+          align-items: center; gap: 0.5em; padding: 0.3em 0.5em; margin: 2px 0;
+          border: 1px solid #ddd; border-radius: 6px; background: var(--background, white); }
+        .mp-off { opacity: 0.5; }
+        .mp-handle { cursor: grab; color: #999; user-select: none; }
+        .mp-model { font-weight: 600; }
+        .mp-opts code { font-size: 0.8em; padding: 0 0.3em; border-radius: 3px;
+          color: inherit; background: color-mix(in srgb, #1f77b4 20%, transparent);
+          border: 1px solid color-mix(in srgb, #1f77b4 45%, transparent); }
+        .mp-default { color: #888; font-style: italic; font-size: 0.85em; }
+        .mp-meta { color: #777; font-size: 0.8em; white-space: nowrap; }
+        .mp-arrows button { border: none; background: none; cursor: pointer; color: #666; padding: 0 2px; }
+        .mp-arrows button:disabled { color: #ddd; cursor: default; }
+        .mp-dragging { opacity: 0.3; }
+        .mp-over { border-color: #1f77b4; box-shadow: 0 -2px 0 #1f77b4; }
+        """
+        items = traitlets.Dict().tag(sync=True)
+        order = traitlets.List(traitlets.Unicode()).tag(sync=True)
+        selected = traitlets.List(traitlets.Unicode()).tag(sync=True)
+
+    return (ModelPicker,)
+
+
+@app.cell(hide_code=True)
+def _(ModelPicker, img_dataset, mo, nn_models):
+    # model checklist: check to show, drag (or use arrows) to reorder
+    _info = img_dataset.info()["models"]
+
+    def _model_item(label, config):
+        _data = _info.get(label, {})
+        _meta = [f"{config.model.dimensions}d"]
+        if "umap" in _data:
+            _meta.append("umap")
+        if "cluster" in _data:
+            _meta.append(f"k={_data['cluster']['k']}")
+        return {
+            "model": config.model.name,
+            # one badge per set option
+            "options": config.option_labels,
+            "meta": " · ".join(_meta),
+        }
+
+    nn_model_picker = mo.ui.anywidget(
+        ModelPicker(
+            items={_l: _model_item(_l, _c) for _l, _c in nn_models.items()},
+            order=list(nn_models),
+            selected=list(nn_models),
+        )
+    )
+    return (nn_model_picker,)
 
 
 @app.cell
@@ -750,11 +873,17 @@ def _(
 
 
 @app.cell
-def _(nn_features, nn_image_df, nn_k, nn_model_select, nn_query_idx, np, pl):
+def _(nn_features, nn_image_df, nn_k, nn_model_picker, nn_query_idx, np, pl):
     # nearest neighbors per selected model (excluding the query image itself)
     nn_neighbors = {}
     # empty when there's no query image
-    for _name in nn_model_select.value if nn_query_idx is not None else []:
+    # checked models, in display order
+    nn_selected_models = [
+        _l
+        for _l in nn_model_picker.value["order"]
+        if _l in nn_model_picker.value["selected"]
+    ]
+    for _name in nn_selected_models if nn_query_idx is not None else []:
         _feats = nn_features[_name]
         _sims = _feats @ _feats[nn_query_idx]
         _sims[nn_query_idx] = -np.inf
@@ -768,7 +897,7 @@ def _(nn_features, nn_image_df, nn_k, nn_model_select, nn_query_idx, np, pl):
             on="idx",
             how="left",
         )
-    return (nn_neighbors,)
+    return nn_neighbors, nn_selected_models
 
 
 @app.cell
@@ -831,19 +960,20 @@ def _(
     nn_doc_type_select,
     nn_image_df,
     nn_k,
-    nn_model_select,
+    nn_model_picker,
     nn_neighbors,
     nn_query_idx,
     nn_query_path,
     nn_random_button,
     nn_results_grid,
+    nn_selected_models,
     nn_shelfmark_search,
     nn_show_captions,
     nn_tag_select,
     nn_thumb_size,
 ):
-    # filters, controls, query image (with document metadata below), and
-    # neighbors in one output, so everything is visible in fullscreen
+    # filters and controls, then query image (with document metadata below)
+    # and model picker next to the neighbors, in one output, so everything is visible in fullscreen
     _filter_ui = mo.vstack(
         [
             mo.md(
@@ -874,7 +1004,12 @@ def _(
             [
                 mo.image(
                     nn_query_path,
-                    style={"height": "250px", "width": "auto", "object-fit": "contain"},
+                    style={
+                        "height": "250px",
+                        "width": "auto",
+                        "max-width": "300px",
+                        "object-fit": "contain",
+                    },
                 ),
                 mo.md("  \n".join(_query_label.splitlines())).style(
                     {"font-size": "0.85em"}
@@ -882,29 +1017,18 @@ def _(
             ],
             align="start",
         )
-    if nn_query_idx is not None and not nn_model_select.value:
+    if nn_query_idx is not None and not nn_selected_models:
         _results = mo.callout(mo.md("Select at least one model."), kind="warn")
     else:
         _results = nn_results_grid
     mo.vstack(
         [
             _filter_ui,
+            # display controls in one row, to leave vertical space for results
             mo.hstack(
-                [
-                    mo.vstack(
-                        [
-                            nn_random_button,
-                            nn_k,
-                            nn_thumb_size,
-                            nn_show_captions,
-                            nn_model_select,
-                        ],
-                        align="start",
-                    ),
-                    _query,
-                ],
+                [nn_random_button, nn_k, nn_thumb_size, nn_show_captions],
                 justify="start",
-                align="start",
+                align="center",
                 gap=2,
             ),
             mo.md(
@@ -912,7 +1036,27 @@ def _(
                 f"for {len(nn_neighbors)} model configuration"
                 f"{'' if len(nn_neighbors) == 1 else 's'}"
             ),
-            _results,
+            # starting image and model picker to the left of the neighbor rows
+            mo.hstack(
+                [
+                    mo.vstack(
+                        [
+                            _query,
+                            mo.md(
+                                "**Models** — check to display; drag or use arrows to reorder"
+                            ),
+                            nn_model_picker,
+                        ],
+                        align="start",
+                        # keep its natural width (no shrinking under the results)
+                    ).style({"flex": "none", "max-width": "420px"}),
+                    # results take the remaining width; rows scroll individually
+                    mo.Html(_results.text).style({"flex": "1 1 0", "min-width": "0"}),
+                ],
+                justify="start",
+                align="start",
+                gap=1,
+            ),
         ]
     )
     return
