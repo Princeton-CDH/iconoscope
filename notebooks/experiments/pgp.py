@@ -1,18 +1,45 @@
 import marimo
 
 __generated_with = "0.25.1"
-app = marimo.App(width="medium")
+app = marimo.App(width="full")
 
 
 @app.cell
 def _():
+    import base64
+    import functools
+    import io
     from pathlib import Path
 
     import marimo as mo
+    import numpy as np
+    from PIL import Image, ImageOps
+    from wigglystuff import ObservablePlot
 
     from iconoscope.dataset import ImageDataset
+    from iconoscope.mosaic import layout_mosaic
 
-    return ImageDataset, Path, mo
+    # max on-screen size of the plot widget, in CSS pixels
+    PLOT_MAX_WIDTH = 1400
+    PLOT_HEIGHT = 700
+    # space above the plot for the summary line and controls
+    PLOT_CHROME = 64
+    return (
+        Image,
+        ImageDataset,
+        ImageOps,
+        ObservablePlot,
+        PLOT_CHROME,
+        PLOT_HEIGHT,
+        PLOT_MAX_WIDTH,
+        Path,
+        base64,
+        functools,
+        io,
+        layout_mosaic,
+        mo,
+        np,
+    )
 
 
 @app.cell
@@ -51,6 +78,224 @@ def _(img_dataset, mo):
         options=_configs, value=list(_configs.keys())[0], label="Embedding"
     )
     embedding_select
+    return (embedding_select,)
+
+
+@app.cell
+def _(mo):
+    n_sample = mo.ui.slider(
+        20, 1000, value=150, step=10, label="Sample size", show_value=True
+    )
+    canvas_w = mo.ui.slider(
+        200, 8000, value=2500, step=100, label="Canvas width", show_value=True
+    )
+    canvas_h = mo.ui.slider(
+        200, 8000, value=1000, step=100, label="Canvas height", show_value=True
+    )
+    show_thumbs = mo.ui.checkbox(value=True, label="Thumbnails")
+    # max thumbnail width in px (resolution, not display size; capped at mosaic cell size)
+    thumb_px = mo.ui.slider(
+        16, 512, value=128, step=16, label="Thumbnail size (px)", show_value=True
+    )
+    # displayed with thumbnail status by the thumbnail cell
+    controls_ui = mo.vstack(
+        [
+            mo.hstack([n_sample, canvas_w, canvas_h], justify="start"),
+            mo.hstack([show_thumbs, thumb_px], justify="start"),
+        ]
+    )
+    return canvas_h, canvas_w, controls_ui, n_sample, show_thumbs, thumb_px
+
+
+@app.cell
+def _(Image, ImageOps, base64, functools, io):
+    # cached per (path, size) so resampling or changing the canvas doesn't
+    # reload images; defined in its own cell so the cache survives reruns
+    @functools.cache
+    def thumbnail_data_uri(path, size):
+        """JPEG data URI of the full image scaled to *cover* ``size`` (no cropping)."""
+        with Image.open(path) as img:
+            _im = ImageOps.cover(img.convert("RGB"), size, Image.LANCZOS)
+        _buf = io.BytesIO()
+        _im.save(_buf, format="JPEG", quality=85)
+        return "data:image/jpeg;base64," + base64.b64encode(_buf.getvalue()).decode()
+
+    return (thumbnail_data_uri,)
+
+
+@app.cell
+def _(embedding_select, img_dataset, mo):
+    # umap is generated (and saved) on first load for this config
+    with mo.status.spinner(f"Loading {embedding_select.selected_key}"):
+        umap_df = img_dataset.load_data(embedding_select.value, umap=True)
+    return (umap_df,)
+
+
+@app.cell
+def _(mo, n_sample, np, umap_df):
+    # sample after loading, so umap coords cover all images (as in generate_mosaic)
+    sample_df = umap_df.sample(min(n_sample.value, umap_df.height))
+    coords = sample_df["umap"].to_numpy().astype(np.float32)
+    paths = sample_df["image_path"].to_list()
+    # same rule as generate_mosaic: most common aspect ratio in the data
+    img_aspect = float(sample_df["aspect_ratio"].mode()[0])
+    mo.md(
+        f"**{len(coords)}** of {umap_df.height} images, image aspect ratio {img_aspect:.2f}"
+    )
+    return coords, img_aspect, paths
+
+
+@app.cell
+def _(
+    controls_ui,
+    img_aspect,
+    mo,
+    paths,
+    show_thumbs,
+    thumb_px,
+    thumbnail_data_uri,
+):
+    # thumbnails depend only on the sample, thumb_px, and aspect ratio (not the
+    # canvas/grid), so layout changes don't reload them; the browser scales to the cell
+    thumbs = None
+    _errors = []
+    _status = None
+    if show_thumbs.value:
+        _size = (thumb_px.value, max(1, round(thumb_px.value / img_aspect)))
+        thumbs = []
+        for _n, _p in enumerate(paths):
+            if _n % 50 == 0:
+                mo.output.replace(
+                    mo.hstack(
+                        [controls_ui, mo.md(f"Loading thumbnails… {_n}/{len(paths)}")],
+                        justify="start",
+                        align="center",
+                        gap=2,
+                    )
+                )
+            try:
+                thumbs.append(thumbnail_data_uri(_p, _size))
+            except Exception as _exc:
+                thumbs.append(None)
+                _errors.append(f"{_p}: {_exc}")
+        _msg = (
+            f"Loaded **{sum(t is not None for t in thumbs)}/{len(thumbs)}** thumbnails."
+        )
+        if _errors:
+            _msg += f" First error: `{_errors[0]}`"
+        _status = mo.md(_msg)
+    mo.hstack([controls_ui, _status], justify="start", align="center", gap=2)
+    return (thumbs,)
+
+
+@app.cell
+def _(canvas_h, canvas_w, coords, img_aspect, layout_mosaic, np):
+    # exactly the same layout logic as generate_mosaic
+    layout = layout_mosaic(coords, canvas_w.value, canvas_h.value, img_aspect)
+    grid_cols, grid_rows = layout.grid.cols, layout.grid.rows
+    cell_w, cell_h = layout.cell_width, layout.cell_height
+
+    # work in mosaic pixel space so cell and canvas aspect ratios are honored;
+    # UMAP coords (0-1) are stretched over the canvas, as assign_to_grid treats them
+    scale = np.array([layout.canvas_width, layout.canvas_height], dtype=float)
+    dest = np.full_like(coords, np.nan, dtype=float)
+    for (_r, _c), _i in layout.assignments.items():
+        dest[_i] = ((_c + 0.5) * cell_w, (_r + 0.5) * cell_h)
+    placed = ~np.isnan(dest[:, 0])
+
+    # mean distance moved, in units of cell diagonals
+    _moved = np.linalg.norm(dest[placed] - coords[placed] * scale, axis=1)
+    mean_dist = float(_moved.mean() / np.hypot(cell_w, cell_h))
+    return (
+        cell_h,
+        cell_w,
+        dest,
+        grid_cols,
+        grid_rows,
+        layout,
+        mean_dist,
+        placed,
+        scale,
+    )
+
+
+@app.cell
+def _(Path, coords, dest, np, paths, placed, scale, thumbs):
+    # one record per placed image: start (sx, sy), end (dx, dy), color, optional img
+    _idx = np.flatnonzero(placed)
+    _src = coords[_idx] * scale
+    _dst = dest[_idx]
+    _c = coords[_idx]
+    points = [
+        {
+            "sx": float(_src[k, 0]),
+            "sy": float(_src[k, 1]),
+            "dx": float(_dst[k, 0]),
+            "dy": float(_dst[k, 1]),
+            # 2D color by original UMAP position
+            "color": "rgb({},{},{})".format(
+                int(255 * _c[k, 0]),
+                int(255 * (0.35 + 0.3 * (1 - _c[k, 0]) * _c[k, 1])),
+                int(255 * _c[k, 1]),
+            ),
+            "img": thumbs[i] if thumbs else None,
+            "label": Path(paths[i]).name,
+        }
+        for k, i in enumerate(_idx)
+    ]
+    return (points,)
+
+
+@app.cell
+def _(mo):
+    # JS shared with ../umap_to_grid.py: builds its own controls and redraws in
+    # the browser, so animation never round-trips to Python
+    MORPH_JS = (mo.notebook_dir().parent / "umap_to_grid.js").read_text()
+    return (MORPH_JS,)
+
+
+@app.cell
+def _(
+    MORPH_JS,
+    ObservablePlot,
+    PLOT_CHROME,
+    PLOT_HEIGHT,
+    PLOT_MAX_WIDTH,
+    cell_h,
+    cell_w,
+    grid_cols,
+    grid_rows,
+    img_aspect,
+    layout,
+    mean_dist,
+    mo,
+    points,
+):
+    # plot fits within PLOT_MAX_WIDTH x PLOT_HEIGHT, preserving canvas aspect
+    _k = min(
+        PLOT_MAX_WIDTH / layout.canvas_width,
+        (PLOT_HEIGHT - PLOT_CHROME) / layout.canvas_height,
+    )
+    umap_grid_widget = mo.ui.anywidget(
+        ObservablePlot(
+            MORPH_JS,
+            variables={
+                "points": points,
+                "cols": grid_cols,
+                "rows": grid_rows,
+                "cellW": cell_w,
+                "cellH": cell_h,
+                "canvasW": layout.canvas_width,
+                "canvasH": layout.canvas_height,
+                "imgAspect": img_aspect,
+                "meanDist": mean_dist,
+                "chrome": PLOT_CHROME,
+            },
+            width=round(layout.canvas_width * _k),
+            height=round(layout.canvas_height * _k) + PLOT_CHROME,
+        )
+    )
+    umap_grid_widget
     return
 
 
