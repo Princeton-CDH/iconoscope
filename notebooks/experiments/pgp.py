@@ -162,6 +162,8 @@ def _(image_meta_df, pgp_meta_df, pl):
             pl.col.type.drop_nulls().unique().sort().alias("doc_types"),
             # PGP tags combined across documents
             pl.col._tags.explode().drop_nulls().unique().sort().alias("tags"),
+            # descriptions of all documents on the shelfmark, for text search
+            pl.col.description.drop_nulls().str.join("\n").alias("description"),
         )
         .with_columns(doc_type=pl.col.doc_types.list.join(", "))
     )
@@ -207,8 +209,10 @@ def _(image_info_df, img_dataset, mo, pl):
         .len()
         .sort("doc_type")
     )
+    # options shared with the similarity search filters
+    doc_type_options = {f"{_t} ({_n:,})": _t for _t, _n in _doc_type_counts.iter_rows()}
     doc_type_select = mo.ui.dropdown(
-        options={f"{_t} ({_n:,})": _t for _t, _n in _doc_type_counts.iter_rows()},
+        options=doc_type_options,
         value=None,
         allow_select_none=True,
         label="Document type",
@@ -222,23 +226,33 @@ def _(image_info_df, img_dataset, mo, pl):
         .len()
         .sort("tag")
     )
+    tag_options = {f"{_t} ({_n:,})": _t for _t, _n in _tag_counts.iter_rows()}
     tag_select = mo.ui.multiselect(
-        options={f"{_t} ({_n:,})": _t for _t, _n in _tag_counts.iter_rows()},
+        options=tag_options,
         label="Keywords",
+    )
+    # case-insensitive text search on PGP document descriptions
+    description_search = mo.ui.text(
+        label="Description", placeholder="search descriptions"
     )
     # displayed above the plot, in the same cell so they're visible in fullscreen
     controls_ui = mo.vstack(
         [
             mo.hstack([embedding_select, n_sample, resample_button], justify="start"),
-            mo.hstack([doc_type_select, tag_select], justify="start"),
+            mo.hstack(
+                [doc_type_select, tag_select, description_search], justify="start"
+            ),
         ]
     )
     return (
         controls_ui,
+        description_search,
+        doc_type_options,
         doc_type_select,
         embedding_select,
         n_sample,
         resample_button,
+        tag_options,
         tag_select,
     )
 
@@ -257,6 +271,32 @@ def _(Image, ImageOps, base64, functools, io):
         return "data:image/jpeg;base64," + base64.b64encode(_buf.getvalue()).decode()
 
     return (thumbnail_data_uri,)
+
+
+@app.cell
+def _(pl):
+    def filter_images(df, doc_type=None, tags=(), description="", shelfmark=""):
+        """Filter images by document type, any of the given PGP tags, and
+        case-insensitive substring search on description and shelfmark"""
+        if doc_type:
+            df = df.filter(pl.col.doc_types.list.contains(doc_type))
+        if tags:
+            df = df.filter(pl.col.tags.list.set_intersection(list(tags)).list.len() > 0)
+        if description.strip():
+            df = df.filter(
+                pl.col.description.str.to_lowercase().str.contains(
+                    description.strip().lower(), literal=True
+                )
+            )
+        if shelfmark.strip():
+            df = df.filter(
+                pl.col.shelfmark.str.to_lowercase().str.contains(
+                    shelfmark.strip().lower(), literal=True
+                )
+            )
+        return df
+
+    return (filter_images,)
 
 
 @app.function
@@ -310,25 +350,23 @@ def _(umap_meta_df):
 
 @app.cell
 def _(
+    description_search,
     doc_type_select,
+    filter_images,
     n_sample,
     np,
-    pl,
     resample_button,
     tag_select,
     umap_meta_df,
 ):
     # sample after loading, so umap coords cover all images (as in generate_mosaic)
     # images matching the current filters (all of them, not just the sample)
-    filtered_df = umap_meta_df
-    if doc_type_select.value:
-        filtered_df = filtered_df.filter(
-            pl.col.doc_types.list.contains(doc_type_select.value)
-        )
-    if tag_select.value:
-        filtered_df = filtered_df.filter(
-            pl.col.tags.list.set_intersection(tag_select.value).list.len() > 0
-        )
+    filtered_df = filter_images(
+        umap_meta_df,
+        doc_type=doc_type_select.value,
+        tags=tag_select.value,
+        description=description_search.value,
+    )
     # referencing resample_button reruns this cell (new random sample) on click
     resample_button.value
     sample_df = filtered_df.sample(min(n_sample.value, filtered_df.height))
@@ -336,8 +374,14 @@ def _(
     paths = sample_df["image_path"].to_list()
     # same rule as generate_mosaic: most common aspect ratio in the data
     img_aspect = float(sample_df["aspect_ratio"].mode()[0])
-    _filters = ([doc_type_select.value] if doc_type_select.value else []) + list(
-        tag_select.value
+    _filters = (
+        ([doc_type_select.value] if doc_type_select.value else [])
+        + list(tag_select.value)
+        + (
+            [f'"{description_search.value.strip()}"']
+            if description_search.value.strip()
+            else []
+        )
     )
     # shown with the controls above the plot
     sample_summary = f"**{len(coords)}** of {filtered_df.height} images{f' ({", ".join(_filters)})' if _filters else ''}, image aspect ratio {img_aspect:.2f}"
@@ -598,7 +642,7 @@ def _(mo):
 
 
 @app.cell
-def _(img_dataset, mo):
+def _(doc_type_options, img_dataset, mo, tag_options):
     # all model + preprocessing configs with stored features, keyed by label
     nn_models = img_dataset.configs_by_label()
     nn_model_select = mo.ui.multiselect(
@@ -612,12 +656,28 @@ def _(img_dataset, mo):
         60, 250, value=120, step=10, label="Thumbnail height", show_value=True
     )
     nn_show_captions = mo.ui.checkbox(value=True, label="Show rank · similarity")
+    # filters for choosing the query image (same as the umap filters, plus shelfmark)
+    nn_doc_type_select = mo.ui.dropdown(
+        options=doc_type_options,
+        value=None,
+        allow_select_none=True,
+        label="Document type",
+    )
+    nn_tag_select = mo.ui.multiselect(options=tag_options, label="Keywords")
+    nn_description_search = mo.ui.text(
+        label="Description", placeholder="search descriptions"
+    )
+    nn_shelfmark_search = mo.ui.text(label="Shelfmark", placeholder="e.g. T-S Ar.52")
     return (
+        nn_description_search,
+        nn_doc_type_select,
         nn_k,
         nn_model_select,
         nn_models,
         nn_random_button,
+        nn_shelfmark_search,
         nn_show_captions,
+        nn_tag_select,
         nn_thumb_size,
     )
 
@@ -656,82 +716,45 @@ def _(image_info_df, img_dataset, mo, nn_models, np, pl):
 
 
 @app.cell
-def _(nn_image_df, nn_random_button, np):
-    # new random query image when the button is clicked
-    nn_random_button.value
-    nn_query_idx = int(np.random.randint(nn_image_df.height))
-    nn_query_path = nn_image_df["image_path"][nn_query_idx]
-    return nn_query_idx, nn_query_path
-
-
-@app.cell
 def _(
-    mo,
+    filter_images,
+    nn_description_search,
+    nn_doc_type_select,
     nn_image_df,
-    nn_k,
-    nn_model_select,
-    nn_query_idx,
-    nn_query_path,
     nn_random_button,
-    nn_show_captions,
-    nn_thumb_size,
+    nn_shelfmark_search,
+    nn_tag_select,
+    np,
 ):
-    # controls | query image, with document metadata below
-    _query_label = image_label(nn_image_df.row(nn_query_idx, named=True))
-    mo.hstack(
-        [
-            mo.vstack(
-                [
-                    nn_random_button,
-                    nn_k,
-                    nn_thumb_size,
-                    nn_show_captions,
-                    nn_model_select,
-                ],
-                align="start",
-            ),
-            mo.vstack(
-                [
-                    mo.image(
-                        nn_query_path,
-                        style={
-                            "height": "250px",
-                            "width": "auto",
-                            "object-fit": "contain",
-                        },
-                    ),
-                    mo.md("  \n".join(_query_label.splitlines())).style(
-                        {"font-size": "0.85em"}
-                    ),
-                ],
-                align="start",
-            ),
-        ],
-        justify="start",
-        align="start",
-        gap=2,
+    # images matching the filters; a random one is the query, and a new one is
+    # picked when the button is clicked
+    nn_candidates = filter_images(
+        nn_image_df,
+        doc_type=nn_doc_type_select.value,
+        tags=nn_tag_select.value,
+        description=nn_description_search.value,
+        shelfmark=nn_shelfmark_search.value,
     )
-    return
+    nn_random_button.value
+    # no query (None) when nothing matches; the results cell shows a warning,
+    # so the filters stay visible
+    nn_query_idx = (
+        int(nn_candidates["idx"][int(np.random.randint(nn_candidates.height))])
+        if nn_candidates.height
+        else None
+    )
+    nn_query_path = (
+        nn_image_df["image_path"][nn_query_idx] if nn_query_idx is not None else None
+    )
+    return nn_candidates, nn_query_idx, nn_query_path
 
 
 @app.cell
-def _(
-    mo,
-    nn_features,
-    nn_image_df,
-    nn_k,
-    nn_model_select,
-    nn_query_idx,
-    np,
-    pl,
-):
+def _(nn_features, nn_image_df, nn_k, nn_model_select, nn_query_idx, np, pl):
     # nearest neighbors per selected model (excluding the query image itself)
-    mo.stop(
-        not nn_model_select.value,
-        mo.callout(mo.md("Select at least one model."), kind="warn"),
-    )
     nn_neighbors = {}
-    for _name in nn_model_select.value:
+    # empty when there's no query image
+    for _name in nn_model_select.value if nn_query_idx is not None else []:
         _feats = nn_features[_name]
         _sims = _feats @ _feats[nn_query_idx]
         _sims[nn_query_idx] = -np.inf
@@ -779,7 +802,8 @@ def _(html, mo, nn_models, nn_neighbors, nn_show_captions, nn_thumb_size):
         f"<div class='nn-imgs'>{''.join(_thumb(r) for r in _df.iter_rows(named=True))}</div>"
         for _name, _df in nn_neighbors.items()
     )
-    mo.Html(
+    # displayed with the controls, below
+    nn_results_grid = mo.Html(
         f"""
         <style>
           .nn-grid {{ display: grid; grid-template-columns: max-content 1fr;
@@ -795,6 +819,101 @@ def _(html, mo, nn_models, nn_neighbors, nn_show_captions, nn_thumb_size):
         </style>
         <div class="nn-grid">{_rows}</div>
         """
+    )
+    return (nn_results_grid,)
+
+
+@app.cell
+def _(
+    mo,
+    nn_candidates,
+    nn_description_search,
+    nn_doc_type_select,
+    nn_image_df,
+    nn_k,
+    nn_model_select,
+    nn_neighbors,
+    nn_query_idx,
+    nn_query_path,
+    nn_random_button,
+    nn_results_grid,
+    nn_shelfmark_search,
+    nn_show_captions,
+    nn_tag_select,
+    nn_thumb_size,
+):
+    # filters, controls, query image (with document metadata below), and
+    # neighbors in one output, so everything is visible in fullscreen
+    _filter_ui = mo.vstack(
+        [
+            mo.md(
+                "**Choose a starting image** — filters narrow the images "
+                "*Random image* picks from; neighbors are always searched "
+                "across the full dataset."
+            ),
+            mo.hstack(
+                [
+                    nn_doc_type_select,
+                    nn_tag_select,
+                    nn_description_search,
+                    nn_shelfmark_search,
+                ],
+                justify="start",
+            ),
+            mo.md(
+                f"**{nn_candidates.height:,}** of {nn_image_df.height:,} images "
+                "match the filters"
+            ),
+        ]
+    )
+    if nn_query_idx is None:
+        _query = mo.callout(mo.md("No images match the filters."), kind="warn")
+    else:
+        _query_label = image_label(nn_image_df.row(nn_query_idx, named=True))
+        _query = mo.vstack(
+            [
+                mo.image(
+                    nn_query_path,
+                    style={"height": "250px", "width": "auto", "object-fit": "contain"},
+                ),
+                mo.md("  \n".join(_query_label.splitlines())).style(
+                    {"font-size": "0.85em"}
+                ),
+            ],
+            align="start",
+        )
+    if nn_query_idx is not None and not nn_model_select.value:
+        _results = mo.callout(mo.md("Select at least one model."), kind="warn")
+    else:
+        _results = nn_results_grid
+    mo.vstack(
+        [
+            _filter_ui,
+            mo.hstack(
+                [
+                    mo.vstack(
+                        [
+                            nn_random_button,
+                            nn_k,
+                            nn_thumb_size,
+                            nn_show_captions,
+                            nn_model_select,
+                        ],
+                        align="start",
+                    ),
+                    _query,
+                ],
+                justify="start",
+                align="start",
+                gap=2,
+            ),
+            mo.md(
+                f"Nearest neighbors across all **{nn_image_df.height:,}** images, "
+                f"for {len(nn_neighbors)} model configuration"
+                f"{'' if len(nn_neighbors) == 1 else 's'}"
+            ),
+            _results,
+        ]
     )
     return
 
