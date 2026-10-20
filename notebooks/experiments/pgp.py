@@ -8,6 +8,7 @@ app = marimo.App(width="full")
 def _():
     import base64
     import functools
+    import html
     import io
     import re
     from pathlib import Path
@@ -54,6 +55,7 @@ def _():
         THUMB_PX,
         base64,
         functools,
+        html,
         io,
         layout_mosaic,
         mo,
@@ -257,6 +259,19 @@ def _(Image, ImageOps, base64, functools, io):
     return (thumbnail_data_uri,)
 
 
+@app.function
+def image_label(meta):
+    """hover text for an image: whatever document metadata is available"""
+    _lines = []
+    if meta.get("shelfmark"):
+        _lines.append(meta["shelfmark"])
+    if meta.get("pgpids"):
+        _lines.append("PGPID " + ", ".join(str(_p) for _p in meta["pgpids"]))
+    if meta.get("doc_type"):
+        _lines.append(meta["doc_type"])
+    return "\n".join(_lines)
+
+
 @app.cell
 def _(embedding_select, img_dataset, mo):
     # umap is generated (and saved) on first load for this config
@@ -439,18 +454,6 @@ def _(coords, dest, np, placed, sample_df, scale):
     _c = coords[_idx]
     _meta = sample_df.select("shelfmark", "pgpids", "doc_type").to_dicts()
 
-    def _label(i):
-        """hover text: whatever document metadata is available"""
-        _m = _meta[i]
-        _lines = []
-        if _m["shelfmark"]:
-            _lines.append(_m["shelfmark"])
-        if _m["pgpids"]:
-            _lines.append("PGPID " + ", ".join(str(_p) for _p in _m["pgpids"]))
-        if _m["doc_type"]:
-            _lines.append(_m["doc_type"])
-        return "\n".join(_lines)
-
     points = [
         {
             "sx": float(_src[k, 0]),
@@ -463,7 +466,7 @@ def _(coords, dest, np, placed, sample_df, scale):
                 int(255 * (0.35 + 0.3 * (1 - _c[k, 0]) * _c[k, 1])),
                 int(255 * _c[k, 1]),
             ),
-            "label": _label(i),
+            "label": image_label(_meta[i]),
         }
         for k, i in enumerate(_idx)
     ]
@@ -620,13 +623,25 @@ def _(img_dataset, mo):
 
 
 @app.cell
-def _(img_dataset, mo, nn_models, np):
+def _(image_info_df, img_dataset, mo, nn_models, np, pl):
     # load paths once, then L2-normalized features for each model, so
     # dot product == cosine similarity
-    nn_image_df = img_dataset.get_image_data().with_row_index("idx")
+    # with document metadata (as for umap_meta_df) for hover labels
+    nn_image_df = (
+        img_dataset.get_image_data()
+        .with_row_index("idx")
+        .with_columns(_rel_path=pl.col.image_path.str.extract(r"(data/pgp-images/.*)$"))
+        .join(
+            image_info_df.rename({"image_path": "_rel_path"}),
+            on="_rel_path",
+            how="left",
+        )
+        .drop("_rel_path")
+        .sort("idx")
+    )
     nn_features = {}
     with mo.status.progress_bar(
-        total=len(nn_models), title="Loading embeddings"
+        total=len(nn_models), title="Loading embeddings", remove_on_exit=True
     ) as _bar:
         for _label, _config in nn_models.items():
             _feats = (
@@ -641,37 +656,32 @@ def _(img_dataset, mo, nn_models, np):
 
 
 @app.cell
-def _(mo, nn_image_df, nn_random_button, np):
-    # re-created when the random button is clicked, picking a new default
+def _(nn_image_df, nn_random_button, np):
+    # new random query image when the button is clicked
     nn_random_button.value
-    nn_image_index = mo.ui.number(
-        start=0,
-        stop=nn_image_df.height - 1,
-        value=int(np.random.randint(nn_image_df.height)),
-        label="Image index",
-    )
-    return (nn_image_index,)
+    nn_query_idx = int(np.random.randint(nn_image_df.height))
+    nn_query_path = nn_image_df["image_path"][nn_query_idx]
+    return nn_query_idx, nn_query_path
 
 
 @app.cell
 def _(
     mo,
     nn_image_df,
-    nn_image_index,
     nn_k,
     nn_model_select,
+    nn_query_idx,
+    nn_query_path,
     nn_random_button,
     nn_show_captions,
     nn_thumb_size,
 ):
-    nn_query_idx = int(nn_image_index.value)
-    nn_query_path = nn_image_df["image_path"][nn_query_idx]
-    # controls | query image
+    # controls | query image, with document metadata below
+    _query_label = image_label(nn_image_df.row(nn_query_idx, named=True))
     mo.hstack(
         [
             mo.vstack(
                 [
-                    nn_image_index,
                     nn_random_button,
                     nn_k,
                     nn_thumb_size,
@@ -690,7 +700,9 @@ def _(
                             "object-fit": "contain",
                         },
                     ),
-                    mo.md(f"`{nn_query_path}`").style({"font-size": "0.8em"}),
+                    mo.md("  \n".join(_query_label.splitlines())).style(
+                        {"font-size": "0.85em"}
+                    ),
                 ],
                 align="start",
             ),
@@ -699,7 +711,7 @@ def _(
         align="start",
         gap=2,
     )
-    return (nn_query_idx,)
+    return
 
 
 @app.cell
@@ -728,12 +740,16 @@ def _(
         _top = _top[np.argsort(-_sims[_top])]
         nn_neighbors[_name] = pl.DataFrame(
             {"idx": _top, "rank": np.arange(1, _k + 1), "similarity": _sims[_top]}
-        ).join(nn_image_df.select("idx", "image_path"), on="idx", how="left")
+        ).join(
+            nn_image_df.select("idx", "image_path", "shelfmark", "pgpids", "doc_type"),
+            on="idx",
+            how="left",
+        )
     return (nn_neighbors,)
 
 
 @app.cell
-def _(mo, nn_models, nn_neighbors, nn_show_captions, nn_thumb_size):
+def _(html, mo, nn_models, nn_neighbors, nn_show_captions, nn_thumb_size):
     # compact grid: one row per model config, label on the left, neighbors
     # packed tightly; rank + similarity overlaid on each thumbnail
     def _label(name):
@@ -756,7 +772,7 @@ def _(mo, nn_models, nn_neighbors, nn_show_captions, nn_thumb_size):
             if nn_show_captions.value
             else ""
         )
-        return f"<div class='nn-thumb' title='{row['image_path']}'>{_img}{_cap}</div>"
+        return f"<div class='nn-thumb' title='{html.escape(image_label(row), quote=True)}'>{_img}{_cap}</div>"
 
     _rows = "".join(
         f"<div class='nn-label'>{_label(_name)}</div>"
