@@ -47,19 +47,42 @@
   fitMode.append(new Option("cover", "slice"), new Option("fit", "meet"));
   const fitLabel = document.createElement("label");
   fitLabel.append("thumbnails: ", fitMode);
-  controls.append(play, slider, label, linesLabel);
+  const resetZoom = document.createElement("button");
+  resetZoom.textContent = "reset zoom";
+  resetZoom.title = "scroll to zoom, drag to pan, double-click to reset";
+  // endpoint labels on either side of the slider
+  const endLabel = (text) => {
+    const s = document.createElement("span");
+    s.textContent = text;
+    s.style.color = "#666";
+    return s;
+  };
+  controls.append(play, endLabel("UMAP"), slider, endLabel("Grid"), label, linesLabel);
   if (points.some((p) => p.img)) controls.append(fitLabel);
+  controls.append(resetZoom);
   const holder = document.createElement("div");
+  holder.style.cssText = "overflow:hidden;cursor:grab";
   root.append(controls, holder);
 
   const ease = (t) => 0.5 - 0.5 * Math.cos(Math.PI * t);
   // all coordinates are in mosaic pixels: canvasW x canvasH, cells cellW x cellH
   const xs = d3.range(cols + 1).map((i) => i * cellW);
   const ys = d3.range(rows + 1).map((i) => i * cellH);
-  // fit the canvas into the available space, preserving its aspect ratio
-  const k = Math.min(width / canvasW, (height - chrome) / canvasH);
-  const plotW = Math.round(canvasW * k), plotH = Math.round(canvasH * k);
-  const cellPxW = cellW * k, cellPxH = cellH * k;
+  // fit the canvas into the available space, preserving its aspect ratio;
+  // recomputed by layout() when entering/leaving fullscreen. With `fill`, the
+  // plot takes the whole available area and the canvas is centered in it, so
+  // zooming/panning can use the full screen; x0/x1, y0/y1 are the visible
+  // bounds in mosaic pixels.
+  let k, plotW, plotH, cellPxW, cellPxH, x0, x1, y0, y1;
+  function fitTo(availW, availH, fill = false) {
+    k = Math.min(availW / canvasW, availH / canvasH);
+    plotW = Math.round(fill ? availW : canvasW * k);
+    plotH = Math.round(fill ? availH : canvasH * k);
+    const padX = (plotW / k - canvasW) / 2, padY = (plotH / k - canvasH) / 2;
+    [x0, x1, y0, y1] = [-padX, canvasW + padX, -padY, canvasH + padY];
+    cellPxW = cellW * k;
+    cellPxH = cellH * k;
+  }
   const useImg = points.some((p) => p.img);
 
   function draw(t) {
@@ -71,8 +94,9 @@
     }));
     const size = 0.25 + 0.75 * e;
     const marks = [
-      Plot.ruleX(xs, { stroke: "#ccc", strokeOpacity: e }),
-      Plot.ruleY(ys, { stroke: "#ccc", strokeOpacity: e }),
+      // grid lines limited to the canvas (the plot may extend past it)
+      Plot.ruleX(xs, { y1: 0, y2: canvasH, stroke: "#ccc", strokeOpacity: e }),
+      Plot.ruleY(ys, { x1: 0, x2: canvasW, stroke: "#ccc", strokeOpacity: e }),
     ];
     if (lines.checked)
       marks.push(Plot.link(points, {
@@ -90,14 +114,92 @@
         }));
     const plot = Plot.plot({
       width: plotW, height: plotH, margin: 0,
-      x: { domain: [0, canvasW], axis: null },
+      x: { domain: [x0, x1], axis: null },
       // row 0 at top, like the mosaic
-      y: { domain: [0, canvasH], reverse: true, axis: null },
+      y: { domain: [y0, y1], reverse: true, axis: null },
       marks,
     });
+    applyZoom(plot);
     holder.replaceChildren(plot);
     label.textContent = `t = ${t.toFixed(2)}`;
   }
+
+  // zoom/pan: the plot is redrawn on every animation frame, so keep the
+  // current transform and reapply it to each new plot as a CSS transform
+  let zoomT = d3.zoomIdentity;
+  function applyZoom(plot = holder.firstChild) {
+    if (!plot) return;
+    plot.style.transformOrigin = "0 0";
+    plot.style.transform = `translate(${zoomT.x}px,${zoomT.y}px) scale(${zoomT.k})`;
+  }
+  const zoom = d3.zoom()
+    .scaleExtent([1, 40])
+    .on("zoom", (event) => { zoomT = event.transform; applyZoom(); });
+  const sel = d3.select(holder).call(zoom).on("dblclick.zoom", null);
+  const reset = () => sel.call(zoom.transform, d3.zoomIdentity);
+  holder.ondblclick = reset;
+  resetZoom.onclick = reset;
+
+  // size the plot for the current space: the given width/height normally, or
+  // the whole screen when the cell output is fullscreen (e.g. marimo's
+  // fullscreen button). The widget wrapper pins its width, so unpin it too.
+  // anywidgets render inside a shadow root, so fs.contains(root) is false
+  // even when this plot is the one shown fullscreen; any fullscreen element
+  // is treated as ours (if it isn't, this plot isn't visible anyway)
+  const fullscreenEl = () =>
+    document.fullscreenElement || document.webkitFullscreenElement || null;
+  let pinned = null;
+  function layout() {
+    const fs = fullscreenEl();
+    const wrapper = root.parentElement && root.parentElement.closest(".observable-plot-container");
+    if (fs) {
+      if (wrapper && pinned === null) {
+        pinned = wrapper.style.width;
+        wrapper.style.width = "100%";
+      }
+      const pad = 16;
+      // available height: the screen minus everything else in the fullscreen
+      // output (widget controls, notebook controls in the same cell). Measured
+      // as content height minus the plot, since marimo may center the content.
+      const kids = [...fs.children].map((c) => c.getBoundingClientRect());
+      const contentH = kids.length
+        ? Math.max(...kids.map((r) => r.bottom)) - Math.min(...kids.map((r) => r.top))
+        : holder.offsetHeight;
+      const otherH = Math.max(0, contentH - holder.offsetHeight);
+      fitTo(fs.clientWidth - 2 * pad, fs.clientHeight - otherH - 2 * pad, true);
+    } else {
+      if (wrapper && pinned !== null) {
+        wrapper.style.width = pinned;
+        pinned = null;
+      }
+      fitTo(width, height - chrome);
+    }
+    holder.style.width = `${plotW}px`;
+    holder.style.height = `${plotH}px`;
+    zoom.extent([[0, 0], [plotW, plotH]]).translateExtent([[0, 0], [plotW, plotH]]);
+    zoomT = d3.zoomIdentity;
+    sel.property("__zoom", d3.zoomIdentity);
+    draw(+slider.value);
+  }
+  // fullscreen changes resize the element after the event; wait a frame
+  // (marimo has no invalidation hook, so drop listeners once the plot is replaced)
+  const onFullscreen = () => {
+    if (!root.isConnected) return cleanup();
+    requestAnimationFrame(layout);
+  };
+  document.addEventListener("fullscreenchange", onFullscreen);
+  document.addEventListener("webkitfullscreenchange", onFullscreen);
+  // also refit while fullscreen if the window is resized
+  const onResize = () => {
+    if (!root.isConnected) return cleanup();
+    if (fullscreenEl()) layout();
+  };
+  window.addEventListener("resize", onResize);
+  const cleanup = () => {
+    document.removeEventListener("fullscreenchange", onFullscreen);
+    document.removeEventListener("webkitfullscreenchange", onFullscreen);
+    window.removeEventListener("resize", onResize);
+  };
 
   let raf = null, dir = 1;
   function step() {
@@ -122,7 +224,7 @@
   lines.onchange = () => draw(+slider.value);
   fitMode.onchange = () => draw(+slider.value);
   // in Observable, stop animating when the cell re-runs (e.g. on resize)
-  if (typeof invalidation !== "undefined") invalidation.then(stop);
-  draw(0);
+  if (typeof invalidation !== "undefined") invalidation.then(() => { stop(); cleanup(); });
+  layout();
   return root;
 })()
