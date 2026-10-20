@@ -594,5 +594,194 @@ def _(mo):
     return
 
 
+@app.cell
+def _(img_dataset, mo):
+    # all model + preprocessing configs with stored features, keyed by label
+    nn_models = img_dataset.configs_by_label()
+    nn_model_select = mo.ui.multiselect(
+        options=list(nn_models), value=list(nn_models), label="Models"
+    )
+    nn_random_button = mo.ui.button(
+        label="Random image", value=0, on_click=lambda v: v + 1
+    )
+    nn_k = mo.ui.slider(3, 30, value=10, label="Neighbors (k)", show_value=True)
+    nn_thumb_size = mo.ui.slider(
+        60, 250, value=120, step=10, label="Thumbnail height", show_value=True
+    )
+    nn_show_captions = mo.ui.checkbox(value=True, label="Show rank · similarity")
+    return (
+        nn_k,
+        nn_model_select,
+        nn_models,
+        nn_random_button,
+        nn_show_captions,
+        nn_thumb_size,
+    )
+
+
+@app.cell
+def _(img_dataset, mo, nn_models, np):
+    # load paths once, then L2-normalized features for each model, so
+    # dot product == cosine similarity
+    nn_image_df = img_dataset.get_image_data().with_row_index("idx")
+    nn_features = {}
+    with mo.status.progress_bar(
+        total=len(nn_models), title="Loading embeddings"
+    ) as _bar:
+        for _label, _config in nn_models.items():
+            _feats = (
+                img_dataset.load_data(config=_config, features=True)["features"]
+                .to_numpy()
+                .astype(np.float32)
+            )
+            _feats /= np.linalg.norm(_feats, axis=1, keepdims=True).clip(min=1e-12)
+            nn_features[_label] = _feats
+            _bar.update()
+    return nn_features, nn_image_df
+
+
+@app.cell
+def _(mo, nn_image_df, nn_random_button, np):
+    # re-created when the random button is clicked, picking a new default
+    nn_random_button.value
+    nn_image_index = mo.ui.number(
+        start=0,
+        stop=nn_image_df.height - 1,
+        value=int(np.random.randint(nn_image_df.height)),
+        label="Image index",
+    )
+    return (nn_image_index,)
+
+
+@app.cell
+def _(
+    mo,
+    nn_image_df,
+    nn_image_index,
+    nn_k,
+    nn_model_select,
+    nn_random_button,
+    nn_show_captions,
+    nn_thumb_size,
+):
+    nn_query_idx = int(nn_image_index.value)
+    nn_query_path = nn_image_df["image_path"][nn_query_idx]
+    # controls | query image
+    mo.hstack(
+        [
+            mo.vstack(
+                [
+                    nn_image_index,
+                    nn_random_button,
+                    nn_k,
+                    nn_thumb_size,
+                    nn_show_captions,
+                    nn_model_select,
+                ],
+                align="start",
+            ),
+            mo.vstack(
+                [
+                    mo.image(
+                        nn_query_path,
+                        style={
+                            "height": "250px",
+                            "width": "auto",
+                            "object-fit": "contain",
+                        },
+                    ),
+                    mo.md(f"`{nn_query_path}`").style({"font-size": "0.8em"}),
+                ],
+                align="start",
+            ),
+        ],
+        justify="start",
+        align="start",
+        gap=2,
+    )
+    return (nn_query_idx,)
+
+
+@app.cell
+def _(
+    mo,
+    nn_features,
+    nn_image_df,
+    nn_k,
+    nn_model_select,
+    nn_query_idx,
+    np,
+    pl,
+):
+    # nearest neighbors per selected model (excluding the query image itself)
+    mo.stop(
+        not nn_model_select.value,
+        mo.callout(mo.md("Select at least one model."), kind="warn"),
+    )
+    nn_neighbors = {}
+    for _name in nn_model_select.value:
+        _feats = nn_features[_name]
+        _sims = _feats @ _feats[nn_query_idx]
+        _sims[nn_query_idx] = -np.inf
+        _k = nn_k.value
+        _top = np.argpartition(-_sims, _k)[:_k]
+        _top = _top[np.argsort(-_sims[_top])]
+        nn_neighbors[_name] = pl.DataFrame(
+            {"idx": _top, "rank": np.arange(1, _k + 1), "similarity": _sims[_top]}
+        ).join(nn_image_df.select("idx", "image_path"), on="idx", how="left")
+    return (nn_neighbors,)
+
+
+@app.cell
+def _(mo, nn_models, nn_neighbors, nn_show_captions, nn_thumb_size):
+    # compact grid: one row per model config, label on the left, neighbors
+    # packed tightly; rank + similarity overlaid on each thumbnail
+    def _label(name):
+        _config = nn_models[name]
+        return f"<div class='nn-model'>{_config.model.name}</div>" + "".join(
+            f"<div class='nn-opt'>{_o}</div>" for _o in _config.option_labels
+        )
+
+    def _thumb(row):
+        _img = mo.image(
+            row["image_path"],
+            style={
+                "height": f"{nn_thumb_size.value}px",
+                "width": "auto",
+                "display": "block",
+            },
+        ).text
+        _cap = (
+            f"<span class='nn-cap'>#{row['rank']} · {row['similarity']:.3f}</span>"
+            if nn_show_captions.value
+            else ""
+        )
+        return f"<div class='nn-thumb' title='{row['image_path']}'>{_img}{_cap}</div>"
+
+    _rows = "".join(
+        f"<div class='nn-label'>{_label(_name)}</div>"
+        f"<div class='nn-imgs'>{''.join(_thumb(r) for r in _df.iter_rows(named=True))}</div>"
+        for _name, _df in nn_neighbors.items()
+    )
+    mo.Html(
+        f"""
+        <style>
+          .nn-grid {{ display: grid; grid-template-columns: max-content 1fr;
+            column-gap: 0.5rem; row-gap: 4px; align-items: center; }}
+          .nn-label {{ text-align: right; font-size: 0.8rem; line-height: 1.2; }}
+          .nn-model {{ font-weight: 600; }}
+          .nn-opt {{ font-size: 0.7rem; opacity: 0.7; }}
+          .nn-imgs {{ display: flex; gap: 2px; overflow-x: auto; }}
+          .nn-thumb {{ position: relative; flex: none; }}
+          .nn-thumb img {{ margin: 0; }}
+          .nn-cap {{ position: absolute; left: 0; bottom: 0; padding: 0 3px;
+            font-size: 0.6rem; color: white; background: rgba(0, 0, 0, 0.55); }}
+        </style>
+        <div class="nn-grid">{_rows}</div>
+        """
+    )
+    return
+
+
 if __name__ == "__main__":
     app.run()
