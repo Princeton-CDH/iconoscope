@@ -24,7 +24,37 @@
 import marimo
 
 __generated_with = "0.25.1"
-app = marimo.App(width="full")
+app = marimo.App(width="full", app_title="PGP image explorer")
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # PGP image explorer
+
+    Explore images of manuscript fragments from the
+    [Princeton Geniza Project](https://geniza.princeton.edu/) (PGP) by visual
+    similarity, using image embeddings from several vision models
+    (e.g. CLIP, SigLIP, DINOv2/v3, ResNet), some with different image
+    preprocessing options (center crop, grayscale).
+
+    **Data:** fragment images retrieved via IIIF, with embeddings and 2D
+    [UMAP](https://umap-learn.readthedocs.io/) projections precomputed with
+    [iconoscope](https://github.com/rlskoeser/iconoscope) and stored in an HDF5 file.
+    Images are linked by shelfmark to PGP document metadata (document type,
+    tags, description), loaded from
+    [pgp-metadata](https://github.com/princetongenizalab/pgp-metadata).
+
+    **What you can do:**
+
+    - **UMAP plot / grid**: view a sample of images positioned by visual
+      similarity, then animate them into a grid; filter by document type,
+      keywords, or description; click an image for document details and links;
+      download a mosaic of a filtered set
+    - **Similarity search**: pick a starting image (random, filtered, or from
+      the plot) and compare its nearest neighbors across all models side by side
+    """)
+    return
 
 
 @app.cell
@@ -173,13 +203,6 @@ def _(ImageDataset, data_dir):
 
 
 @app.cell
-def _():
-    # TODO: summarize info and make readable for users
-    # img_dataset.info()
-    return
-
-
-@app.cell
 def _(image_meta_csv, pl):
     # load metadata
     # TODO: this csv changes structure part way through and is not all of the files
@@ -199,21 +222,7 @@ def _(image_meta_csv, pl):
         .drop("image_path", "shelfmark")
         .rename({"real_path": "image_path", "real_shelfmark": "shelfmark"})
     )
-
-    image_meta_df
     return (image_meta_df,)
-
-
-@app.cell
-def _(image_meta_df):
-    image_meta_df["keyword"].value_counts()
-    return
-
-
-@app.cell
-def _(image_meta_df):
-    image_meta_df["type"].value_counts()
-    return
 
 
 @app.cell
@@ -225,16 +234,7 @@ def _(documents_csv, pl):
         .explode("shelfmark_list")
         .rename({"shelfmark": "shelfmark_orig", "shelfmark_list": "shelfmark"})
     )
-    pgp_meta_df
     return (pgp_meta_df,)
-
-
-@app.cell
-def _(image_meta_df, pgp_meta_df):
-    # TODO: not sure how this handles shelfmarks associated with multiple documents
-    pgp_image_meta_df = image_meta_df.join(pgp_meta_df, on="shelfmark")
-    pgp_image_meta_df
-    return
 
 
 @app.cell
@@ -261,7 +261,6 @@ def _(image_meta_df, pgp_meta_df, pl):
         .with_columns(doc_type=pl.col.doc_types.list.join(", "))
     )
     image_info_df = _img.join(_docs, on="shelfmark", how="left")
-    image_info_df
     return (image_info_df,)
 
 
@@ -482,12 +481,6 @@ def _(image_info_df, mo, pl, umap_df):
         f"PGP document match for **{umap_meta_df['pgpids'].is_not_null().sum()}**"
     )
     return (umap_meta_df,)
-
-
-@app.cell
-def _(umap_meta_df):
-    umap_meta_df
-    return
 
 
 @app.cell
