@@ -16,6 +16,11 @@
 //                               (width/height are then only the initial size)
 //   imgAspect, meanDist       - OPTIONAL; if defined, a summary line is shown
 //                               (image aspect ratio; mean displacement in cell diagonals)
+//   model                     - OPTIONAL; an anywidget model with a synced integer
+//                               `selected` trait makes points clickable: clicking sets
+//                               `selected` to the point's `id` (or its index if no id;
+//                               click again to clear, -1), and the selected point is
+//                               outlined
 (() => {
   const root = document.createElement("div");
   if (typeof meanDist !== "undefined" && meanDist != null) {
@@ -87,6 +92,29 @@
   }
   const useImg = points.some((p) => p.img);
 
+  // OPTIONAL click-to-select, synced through the widget model
+  const selectable =
+    typeof model !== "undefined" && model && typeof model.get("selected") === "number";
+  const pointId = (p, i) => (p.id ?? i);
+  // a click ends a drag too; only count clicks that didn't move
+  let downAt = null;
+  // Plot render transform: attach click handlers to the drawn elements
+  // (`index` maps each element to its datum)
+  const clickable = (index, scales, values, dimensions, context, next) => {
+    const g = next(index, scales, values, dimensions, context);
+    g.querySelectorAll("image, circle").forEach((el, j) => {
+      const i = index[j];
+      el.style.cursor = "pointer";
+      el.addEventListener("click", (event) => {
+        if (downAt && Math.hypot(event.clientX - downAt[0], event.clientY - downAt[1]) > 4) return;
+        const id = pointId(points[i], i);
+        model.set("selected", model.get("selected") === id ? -1 : id);
+        model.save_changes();
+      });
+    });
+    return g;
+  };
+
   function draw(t) {
     const e = ease(t);
     const pos = points.map((p) => ({
@@ -109,11 +137,27 @@
           x: "x", y: "y", src: "img",
           width: cellPxW * size, height: cellPxH * size, title: "label",
           preserveAspectRatio: `xMidYMid ${fitMode.value}`,
+          ...(selectable ? { render: clickable } : {}),
         })
       : Plot.dot(pos, {
           x: "x", y: "y", fill: "color",
           r: 2 + (Math.min(cellPxW, cellPxH) / 2 - 2) * e, title: "label",
+          ...(selectable ? { render: clickable } : {}),
         }));
+    if (selectable) {
+      // outline the selected point, at the size it's drawn
+      const s = model.get("selected");
+      // half-size in mosaic pixels: image cell, or dot radius (px) + margin
+      const r = (2 + (Math.min(cellPxW, cellPxH) / 2 - 2) * e + 2) / k;
+      const hw = useImg ? (cellW * size) / 2 : r;
+      const hh = useImg ? (cellH * size) / 2 : r;
+      const selPos = pos.filter((p, i) => pointId(p, i) === s);
+      marks.push(Plot.rect(selPos, {
+        x1: (p) => p.x - hw, x2: (p) => p.x + hw,
+        y1: (p) => p.y - hh, y2: (p) => p.y + hh,
+        stroke: "#1f77b4", strokeWidth: 3, fill: "none",
+      }));
+    }
     const plot = Plot.plot({
       width: plotW, height: plotH, margin: 0,
       x: { domain: [x0, x1], axis: null },
@@ -138,6 +182,7 @@
     .scaleExtent([1, 40])
     .on("zoom", (event) => { zoomT = event.transform; applyZoom(); });
   const sel = d3.select(holder).call(zoom).on("dblclick.zoom", null);
+  holder.addEventListener("pointerdown", (event) => { downAt = [event.clientX, event.clientY]; }, true);
   const reset = () => sel.call(zoom.transform, d3.zoomIdentity);
   holder.ondblclick = reset;
   resetZoom.onclick = reset;
@@ -243,6 +288,7 @@
     document.removeEventListener("webkitfullscreenchange", onFullscreen);
     window.removeEventListener("resize", onResize);
     if (ro) ro.disconnect();
+    if (selectable) model.off("change:selected", onSelected);
   };
 
   let raf = null, dir = 1;
@@ -267,6 +313,12 @@
   slider.oninput = () => { stop(); draw(+slider.value); };
   lines.onchange = () => draw(+slider.value);
   fitMode.onchange = () => draw(+slider.value);
+  // redraw when the selection changes (from a click here or from Python)
+  const onSelected = () => {
+    if (!root.isConnected) return;
+    if (!raf) draw(+slider.value);
+  };
+  if (selectable) model.on("change:selected", onSelected);
   // in Observable, stop animating when the cell re-runs (e.g. on resize)
   if (typeof invalidation !== "undefined") invalidation.then(() => { stop(); cleanup(); });
   layout();

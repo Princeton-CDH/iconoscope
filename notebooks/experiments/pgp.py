@@ -541,7 +541,7 @@ def _(CANVAS_HEIGHT, CANVAS_WIDTH, coords, img_aspect, layout_mosaic, np):
 
 @app.cell
 def _(coords, dest, np, placed, sample_df, scale):
-    # one record per placed image: start (sx, sy), end (dx, dy), color, label;
+    # one record per placed image: start (sx, sy), end (dx, dy), color, label, id;
     # thumbnails ("img") are added by the plot cell
     _idx = np.flatnonzero(placed)
     _src = coords[_idx] * scale
@@ -562,6 +562,8 @@ def _(coords, dest, np, placed, sample_df, scale):
                 int(255 * _c[k, 1]),
             ),
             "label": image_label(_meta[i]),
+            # row in sample_df, sent back when the point is clicked
+            "id": int(i),
         }
         for k, i in enumerate(_idx)
     ]
@@ -569,39 +571,43 @@ def _(coords, dest, np, placed, sample_df, scale):
 
 
 @app.cell
-def _(mo):
+def _(ObservablePlot, mo, traitlets):
     # JS shared with ../umap_to_grid.py: builds its own controls and redraws in
     # the browser, so animation never round-trips to Python
     MORPH_JS = (mo.notebook_dir().parent / "umap_to_grid.js").read_text()
-    return (MORPH_JS,)
+
+    class SelectablePlot(ObservablePlot):
+        """ObservablePlot with a synced `selected` point id; MORPH_JS makes
+        points clickable when it's present (-1 = nothing selected)"""
+
+        selected = traitlets.Int(-1).tag(sync=True)
+
+    return MORPH_JS, SelectablePlot
 
 
 @app.cell
 def _(
     MORPH_JS,
-    ObservablePlot,
     PLOT_CHROME,
     PLOT_HEIGHT,
     PLOT_MAX_WIDTH,
+    SelectablePlot,
     THUMB_PX,
     cell_h,
     cell_w,
-    controls_ui,
     grid_cols,
     grid_rows,
     img_aspect,
     layout,
     mean_dist,
     mo,
-    mosaic_download,
     np,
     paths,
     placed,
     points,
-    sample_summary,
     thumbnail_data_uri,
 ):
-    # initial size (and placeholder while loading): fits within PLOT_MAX_WIDTH x
+    # initial size: fits within PLOT_MAX_WIDTH x
     # PLOT_HEIGHT, preserving canvas aspect; the plot then fills the available width
     _k = min(
         PLOT_MAX_WIDTH / layout.canvas_width,
@@ -610,44 +616,30 @@ def _(
     _plot_w = round(layout.canvas_width * _k)
     _plot_h = round(layout.canvas_height * _k) + PLOT_CHROME
 
-    # thumbnails are loaded here (not in their own cell) so loading progress shows
-    # to the right of the controls, with a placeholder the size of the plot, and
-    # the page doesn't shift; thumbnail_data_uri caches, so repeats are fast
+    # thumbnails, with a progress bar that's removed when done (the plot is
+    # displayed with the details panel, in the next cell); thumbnail_data_uri
+    # caches, so repeats are fast
     _placed_paths = [paths[_i] for _i in np.flatnonzero(placed)]
     _size = (THUMB_PX, max(1, round(THUMB_PX / img_aspect)))
     _thumbs = []
     _errors = []
-    for _n, _p in enumerate(_placed_paths):
-        if _n % 10 == 0:
-            mo.output.replace(
-                mo.vstack(
-                    [
-                        mo.hstack(
-                            [
-                                controls_ui,
-                                mo.md(f"Loading thumbnails… {_n}/{len(_placed_paths)}"),
-                            ],
-                            justify="start",
-                            align="center",
-                            gap=2,
-                        ),
-                        mo.Html(f'<div style="height:{_plot_h + 30}px"></div>'),
-                    ]
-                )
-            )
+    for _p in mo.status.progress_bar(
+        _placed_paths, title="Loading thumbnails", remove_on_exit=True
+    ):
         try:
             _thumbs.append(thumbnail_data_uri(_p, _size))
         except Exception as _exc:
             _thumbs.append(None)
             _errors.append(f"{_p}: {_exc}")
-    _thumb_status = (
+    umap_thumb_status = (
         f"Loaded **{sum(_t is not None for _t in _thumbs)}/{len(_thumbs)}** thumbnails."
     )
     if _errors:
-        _thumb_status += f" First error: `{_errors[0]}`"
+        umap_thumb_status += f" First error: `{_errors[0]}`"
 
     umap_grid_widget = mo.ui.anywidget(
-        ObservablePlot(
+        # click a point for details and links (panel to the right)
+        SelectablePlot(
             MORPH_JS,
             variables={
                 "points": [{**_pt, "img": _t} for _pt, _t in zip(points, _thumbs)],
@@ -667,16 +659,75 @@ def _(
             height=_plot_h,
         )
     )
+    # displayed with the details panel, in the next cell
+    return umap_grid_widget, umap_thumb_status
+
+
+@app.cell
+def _(
+    controls_ui,
+    document_links_md,
+    mo,
+    mosaic_download,
+    nn_image_df,
+    nn_set_start,
+    nn_start_token,
+    pl,
+    sample_df,
+    sample_summary,
+    umap_grid_widget,
+    umap_thumb_status,
+):
+    # details + external links for the image clicked in the UMAP plot
+    _sel = umap_grid_widget.value["selected"]
+    if _sel < 0:
+        umap_panel = mo.md("*Click an image for details and links.*").style(
+            {"font-size": "0.85em", "opacity": "0.7"}
+        )
+    else:
+        _row = sample_df.row(_sel, named=True)
+        # same image in the similarity search, to start a search from it
+        _nn_idx = nn_image_df.filter(pl.col.image_path == _row["image_path"])["idx"]
+        _search = mo.ui.button(
+            label="Find similar images",
+            disabled=_nn_idx.is_empty(),
+            on_click=lambda _: nn_set_start((int(_nn_idx[0]), nn_start_token)),
+        )
+        umap_panel = mo.vstack(
+            [
+                mo.image(
+                    _row["image_path"],
+                    style={"max-height": "300px", "max-width": "100%", "width": "auto"},
+                ),
+                mo.md(document_links_md(_row)).style({"font-size": "0.85em"}),
+                _search,
+                mo.md(
+                    "<small>sets the starting image in Similarity search, below</small>"
+                ).style({"opacity": "0.7"}),
+            ],
+            align="start",
+        )
+    # controls, plot, and panel in one output, so all are visible in fullscreen
     mo.vstack(
         [
             controls_ui,
             mo.hstack(
-                [mo.md(f"{sample_summary} · {_thumb_status}"), mosaic_download],
+                [mo.md(f"{sample_summary} · {umap_thumb_status}"), mosaic_download],
                 justify="start",
                 align="center",
                 gap=2,
             ),
-            umap_grid_widget,
+            mo.hstack(
+                [
+                    mo.vstack([umap_grid_widget]).style(
+                        {"flex": "1 1 0", "min-width": "0"}
+                    ),
+                    mo.vstack([umap_panel]).style({"flex": "none", "width": "320px"}),
+                ],
+                justify="start",
+                align="start",
+                gap=1,
+            ),
         ]
     )
     return
