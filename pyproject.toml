@@ -45,6 +45,7 @@ dev = [
     "marimo>=0.25.1",
     "pytest>=8.0",
     "pytest-cov>=7.1.0",
+    "wigglystuff>=0.5.36",
 ]
 
 [build-system]
