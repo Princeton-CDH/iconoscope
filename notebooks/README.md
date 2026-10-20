@@ -96,15 +96,17 @@ nearest neighbor search with PGP document metadata (loaded from
 - similarity search: compare an image's nearest neighbors across all models
 
 The notebook declares its own dependencies (without torch, which is only
-needed to generate embeddings), so it can run in a sandbox. Point it at the
-data with one of these environment variables:
-
-- `PGP_DATA_URL`: url or local path of a data tarball (e.g. a sample subset),
-  downloaded and extracted to `~/.cache/iconoscope/pgp-subset` on first use
-- `PGP_DATA_DIR`: local directory with `pgp.h5`, `image_meta.csv`, and images
-  under `data/pgp-images/`
+needed to generate embeddings), so it can run in a sandbox:
 
 ```console
-PGP_DATA_URL=https://example.com/pgp-molab-subset.tar \
-  uvx marimo edit --sandbox notebooks/experiments/pgp.py
+uvx marimo edit --sandbox notebooks/experiments/pgp.py
 ```
+
+By default it downloads a random sample of 500 PGP images with metadata
+(about 28 MB), extracted to `~/.cache/iconoscope/pgp-subset` on first use.
+To use other data, set one of these environment variables:
+
+- `PGP_DATA_URL`: url or local path of a data tarball (delete the cache
+  directory to switch tarballs)
+- `PGP_DATA_DIR`: local directory with `pgp.h5`, `image_meta.csv`, and images
+  under `data/pgp-images/`
