@@ -9,8 +9,11 @@ import polars as pl
 import pytest
 from PIL import Image
 
-from iconoscope.dataset import ImageDataset, find_images
-from iconoscope.models import DEFAULT_MODEL, EmbeddingModel
+from iconoscope.dataset import ImageDataset, StorageSchema, find_images
+from iconoscope.models import DEFAULT_MODEL, EmbeddingConfig, EmbeddingModel
+
+CONFIG = EmbeddingConfig(DEFAULT_MODEL)
+CLIP_CONFIG = EmbeddingConfig(EmbeddingModel("clip", "foobar/clip", 73))
 
 ## image dataset class
 
@@ -181,12 +184,14 @@ def test_save_features_preserves_existing_data(tmp_path: Path, tmp_image_dir: Pa
                 "features": np.array([[1.0, 0.0], [0.0, 1.0]]),
             }
         ),
-        DEFAULT_MODEL,
+        CONFIG,
     )
     with h5py.File(storage_path, "r+") as h5_file:
-        model_group = h5_file["image/models/dinov2"]
-        model_group.create_dataset("umap", data=[[0.1, 0.2], [0.3, 0.4]])
-        cluster = model_group.create_dataset("cluster", data=[0, 1])
+        model_group = h5_file[dataset.schema.model_group(CONFIG, absolute=True)]
+        model_group.create_dataset(
+            dataset.schema.umap_ds, data=[[0.1, 0.2], [0.3, 0.4]]
+        )
+        cluster = model_group.create_dataset(dataset.schema.cluster_ds, data=[0, 1])
         cluster.attrs["n_clusters"] = 2
 
     dataset.save_features(
@@ -196,21 +201,22 @@ def test_save_features_preserves_existing_data(tmp_path: Path, tmp_image_dir: Pa
                 "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
             }
         ),
-        EmbeddingModel("clip", "foobar/clip", 73),
+        CLIP_CONFIG,
     )
 
     with h5py.File(storage_path, "r") as h5_file:
         assert set(h5_file["image/models"]) == {"dinov2", "clip"}
-        assert h5_file["image/models/dinov2/features"][:].tolist() == [
+        dinov2_model_grp = h5_file[dataset.schema.model_group(CONFIG, absolute=True)]
+        assert dinov2_model_grp[dataset.schema.features_ds][:].tolist() == [
             [1.0, 0.0],
             [0.0, 1.0],
         ]
-        assert h5_file["image/models/dinov2/umap"][:].tolist() == [
+        assert dinov2_model_grp[dataset.schema.umap_ds][:].tolist() == [
             [0.1, 0.2],
             [0.3, 0.4],
         ]
-        assert h5_file["image/models/dinov2/cluster"][:].tolist() == [0, 1]
-        assert h5_file["image/models/dinov2/cluster"].attrs["n_clusters"] == 2
+        assert dinov2_model_grp[dataset.schema.cluster_ds][:].tolist() == [0, 1]
+        assert dinov2_model_grp[dataset.schema.cluster_ds].attrs["n_clusters"] == 2
 
 
 def test_save_features_rejects_different_image_paths(
@@ -227,7 +233,7 @@ def test_save_features_rejects_different_image_paths(
                     "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
                 }
             ),
-            DEFAULT_MODEL,
+            CONFIG,
         )
 
 
@@ -244,7 +250,7 @@ def test_save_features_rejects_mismatched_feature_rows(
                 "features": np.array([[1.0, 0.0], [0.0, 1.0], [0.0, 0.5]]),
             }
         ),
-        DEFAULT_MODEL,
+        CONFIG,
     )
     with pytest.raises(
         ValueError, match="cannot prune image paths when existing models are present"
@@ -257,7 +263,7 @@ def test_save_features_rejects_mismatched_feature_rows(
                     "features": np.array([[2.0, 0.0]]),
                 }
             ),
-            EmbeddingModel("clip", "foobar/baz", 73),
+            CLIP_CONFIG,
         )
 
 
@@ -275,7 +281,7 @@ def test_save_features_rm_invalid_paths_on_first_model(
                 "features": np.array([[2.0, 0.0]]),
             }
         ),
-        DEFAULT_MODEL,
+        CONFIG,
     )
 
     assert dataset.image_count == 1
@@ -294,7 +300,7 @@ def test_save_features_rejects_non_2d_features(tmp_path: Path, tmp_image_dir: Pa
                     "features": [2.0, 3.0],
                 }
             ),
-            DEFAULT_MODEL,
+            CONFIG,
         )
 
 
@@ -313,7 +319,7 @@ def test_save_features_rejects_unsupported_columns(tmp_path: Path, tmp_image_dir
                     "label": ["a", "b"],
                 }
             ),
-            DEFAULT_MODEL,
+            CONFIG,
         )
 
 
@@ -330,14 +336,13 @@ def test_save_features_no_overwrite(tmp_path: Path, tmp_image_dir: Path):
         }
     )
 
-    model_name = DEFAULT_MODEL.name
-    dataset.save_features(feature_df, DEFAULT_MODEL)
+    dataset.save_features(feature_df, CONFIG)
 
     with pytest.raises(
-        ValueError, match=f"Features for '{model_name}' are already present"
+        ValueError, match="Features for 'dinov2/defaults' are already present"
     ):
         # rejects on second time
-        dataset.save_features(feature_df, DEFAULT_MODEL)
+        dataset.save_features(feature_df, CONFIG)
 
 
 def test_save_features_overwrite(tmp_path: Path, tmp_image_dir: Path):
@@ -351,16 +356,20 @@ def test_save_features_overwrite(tmp_path: Path, tmp_image_dir: Path):
             "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
         }
     )
-    dataset.save_features(feature_df, DEFAULT_MODEL)
+    dataset.save_features(feature_df, CONFIG)
     # add derived results that should be removed on overwrite
-    dataset.save_clusters(np.array([0, 1]), 2, DEFAULT_MODEL)
+    dataset.save_clusters(np.array([0, 1]), 2, CONFIG)
 
     new_df = feature_df.with_columns(features=np.array([[5.0, 5.0], [6.0, 6.0]]))
-    dataset.save_features(new_df, DEFAULT_MODEL, overwrite=True)
+    dataset.save_features(new_df, CONFIG, overwrite=True)
 
-    saved = dataset.load_data(DEFAULT_MODEL, features=True)
+    saved = dataset.load_data(CONFIG, features=True)
     assert saved["features"].to_numpy().tolist() == [[5.0, 5.0], [6.0, 6.0]]
-    assert "cluster" not in dataset.info()["models"][DEFAULT_MODEL.name]
+    assert (
+        "cluster"
+        # currently reporting as named in h5, i.e. model/opts
+        not in dataset.info()["models"][dataset.schema.model_group(CONFIG)]
+    )
 
 
 def test_save_features_unknown_paths(tmp_path: Path, tmp_image_dir: Path):
@@ -374,7 +383,7 @@ def test_save_features_unknown_paths(tmp_path: Path, tmp_image_dir: Path):
         }
     )
     with pytest.raises(ValueError, match=r"\(2 unknown paths\)"):
-        dataset.save_features(feature_df, DEFAULT_MODEL)
+        dataset.save_features(feature_df, CONFIG)
 
 
 def test_has_features(tmp_path: Path, tmp_image_dir: Path):
@@ -389,10 +398,10 @@ def test_has_features(tmp_path: Path, tmp_image_dir: Path):
             "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
         }
     )
-    assert not dataset.has_features(DEFAULT_MODEL)
-    dataset.save_features(feature_df, DEFAULT_MODEL)
-    assert dataset.has_features(DEFAULT_MODEL)
-    assert not dataset.has_features(EmbeddingModel("clip", "foobar/baz", 72))
+    assert not dataset.has_features(CONFIG)
+    dataset.save_features(feature_df, CONFIG)
+    assert dataset.has_features(CONFIG)
+    assert not dataset.has_features(CLIP_CONFIG)
 
 
 ## test find images utility method
@@ -465,5 +474,156 @@ def test_load_data_requires_model(tmp_path: Path, tmp_image_dir: Path, kwargs):
     dataset = ImageDataset.create(
         storage_path=tmp_path / "data.h5", image_dir=tmp_image_dir
     )
-    with pytest.raises(ValueError, match="model is required"):
+    with pytest.raises(ValueError, match="model configuration is required"):
         dataset.load_data(**kwargs)
+
+
+## embedding configuration / preprocessing options
+
+
+def _two_image_dataset(tmp_image_dir: Path) -> tuple[ImageDataset, pl.DataFrame]:
+    dataset = ImageDataset.create(
+        image_dir=tmp_image_dir, storage_path=tmp_image_dir / "data.h5", max_images=2
+    )
+    feature_df = pl.DataFrame(
+        {
+            "image_path": [str(p) for p in dataset.get_image_paths()],
+            "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
+        }
+    )
+    return dataset, feature_df
+
+
+@pytest.mark.parametrize(
+    "config, absolute, expected",
+    [
+        (CONFIG, False, "dinov2/defaults"),
+        (CONFIG, True, "image/models/dinov2/defaults"),
+        (
+            EmbeddingConfig(DEFAULT_MODEL, center_crop=0.6, grayscale=True),
+            True,
+            "image/models/dinov2/center_crop=0.6_grayscale",
+        ),
+    ],
+)
+def test_schema_model_group(config, absolute, expected):
+    assert StorageSchema.model_group(config, absolute=absolute) == expected
+
+
+def test_has_features_any(tmp_image_dir: Path):
+    dataset, feature_df = _two_image_dataset(tmp_image_dir)
+    # no models group yet
+    assert not dataset.has_features()
+    dataset.save_features(feature_df, CLIP_CONFIG)
+    assert dataset.has_features()
+
+
+def test_has_features_any_ignores_groups_without_features(tmp_image_dir: Path):
+    dataset, _ = _two_image_dataset(tmp_image_dir)
+    with h5py.File(dataset.storage_path, "r+") as h5_file:
+        h5_file.require_group(dataset.schema.model_group(CONFIG, absolute=True))
+    assert not dataset.has_features()
+
+
+def test_has_features_missing_storage(tmp_path: Path, tmp_image_dir: Path):
+    dataset = ImageDataset(
+        storage_path=tmp_path / "missing.h5", image_dir=tmp_image_dir
+    )
+    assert not dataset.has_features()
+    assert not dataset.has_features(CONFIG)
+
+
+def test_has_features_preprocess_specific(tmp_image_dir: Path):
+    dataset, feature_df = _two_image_dataset(tmp_image_dir)
+    gray_config = EmbeddingConfig(DEFAULT_MODEL, grayscale=True)
+    dataset.save_features(feature_df, gray_config)
+    assert dataset.has_features(gray_config)
+    # same model with different preprocessing is a different feature set
+    assert not dataset.has_features(CONFIG)
+    assert not dataset.has_features(
+        EmbeddingConfig(DEFAULT_MODEL, center_crop=0.6, grayscale=True)
+    )
+
+
+def test_save_load_features_per_preprocess_config(tmp_image_dir: Path):
+    dataset, feature_df = _two_image_dataset(tmp_image_dir)
+    crop_config = EmbeddingConfig(DEFAULT_MODEL, center_crop=0.6)
+    dataset.save_features(feature_df, CONFIG)
+    # same model with different options does not conflict with existing features
+    dataset.save_features(
+        feature_df.with_columns(features=np.array([[7.0, 7.0], [8.0, 8.0]])),
+        crop_config,
+    )
+
+    default_df = dataset.load_data(CONFIG, features=True)
+    crop_df = dataset.load_data(crop_config, features=True)
+    assert default_df["features"].to_numpy().tolist() == [[2.0, 0.0], [0.0, 2.0]]
+    assert crop_df["features"].to_numpy().tolist() == [[7.0, 7.0], [8.0, 8.0]]
+
+    with h5py.File(dataset.storage_path, "r") as h5_file:
+        assert set(h5_file["image/models/dinov2"]) == {"defaults", "center_crop=0.6"}
+    assert set(dataset.info()["models"]) == {
+        "dinov2/defaults",
+        "dinov2/center_crop=0.6",
+    }
+
+
+def test_overwrite_only_replaces_matching_config(tmp_image_dir: Path):
+    dataset, feature_df = _two_image_dataset(tmp_image_dir)
+    gray_config = EmbeddingConfig(DEFAULT_MODEL, grayscale=True)
+    dataset.save_features(feature_df, CONFIG)
+    dataset.save_features(feature_df, gray_config)
+    dataset.save_clusters(np.array([0, 1]), 2, CONFIG)
+
+    dataset.save_features(
+        feature_df.with_columns(features=np.ones((2, 2))), gray_config, overwrite=True
+    )
+    # default config features and derived clusters are untouched
+    df = dataset.load_data(CONFIG, features=True, clusters=True)
+    assert df["features"].to_numpy().tolist() == [[2.0, 0.0], [0.0, 2.0]]
+    assert df["cluster"].to_list() == [0, 1]
+
+
+def test_save_clusters_preprocess_config(tmp_image_dir: Path):
+    dataset, feature_df = _two_image_dataset(tmp_image_dir)
+    gray_config = EmbeddingConfig(DEFAULT_MODEL, grayscale=True)
+    dataset.save_features(feature_df, CONFIG)
+    dataset.save_features(feature_df, gray_config)
+    dataset.save_clusters(np.array([1, 0]), 2, gray_config)
+
+    # clusters stored with the matching config only
+    gray_df = dataset.load_data(gray_config, features=True, clusters=True)
+    assert gray_df["cluster"].to_list() == [1, 0]
+    default_df = dataset.load_data(CONFIG, features=True, clusters=True)
+    assert "cluster" not in default_df.columns
+    info = dataset.info()["models"]
+    assert info["dinov2/grayscale"]["cluster"]["k"] == 2
+    assert "cluster" not in info["dinov2/defaults"]
+
+
+def test_save_features_stores_config_attrs(tmp_path: Path, tmp_image_dir: Path):
+    storage_path = tmp_path / "data.h5"
+    dataset = ImageDataset.create(
+        storage_path=storage_path, image_dir=tmp_image_dir, max_images=2
+    )
+    paths = [str(p) for p in dataset.get_image_paths()]
+    df = pl.DataFrame(
+        {"image_path": paths, "features": np.array([[1.0, 0.0], [0.0, 1.0]])}
+    )
+    custom = EmbeddingConfig(DEFAULT_MODEL, center_crop=0.6, grayscale=True)
+    dataset.save_features(df, CONFIG)
+    dataset.save_features(df, custom)
+
+    with h5py.File(storage_path, "r") as h5_file:
+        attrs = h5_file[dataset.schema.model_group(custom, absolute=True)].attrs
+        assert attrs["model"] == DEFAULT_MODEL.name
+        assert attrs["model_id"] == DEFAULT_MODEL.id
+        assert attrs["center_crop"] == 0.6
+        assert attrs["grayscale"]
+        default_attrs = h5_file[dataset.schema.model_group(CONFIG, absolute=True)].attrs
+        assert "center_crop" not in default_attrs
+        assert not default_attrs["grayscale"]
+
+    configs = dataset.get_configs()
+    assert set(configs) == {CONFIG, custom}
+    assert all(isinstance(c.grayscale, bool) for c in configs)

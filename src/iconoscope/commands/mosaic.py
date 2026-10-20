@@ -1,17 +1,18 @@
 import argparse
 
-from iconoscope.commands import get_model, require_features
+from iconoscope.commands import get_embedding_config, require_features
 from iconoscope.dataset import ImageDataset
 from iconoscope.mosaic import generate_mosaic
 
 
 def main(args: argparse.Namespace) -> None:
-    model = get_model(args.model)
+    embed_config = get_embedding_config(args)
+
     img_dataset = ImageDataset(storage_path=args.dataset)
-    require_features(img_dataset, model)
+    require_features(img_dataset, embed_config)
     generate_mosaic(
         img_dataset,
-        model,
+        embed_config,
         output=args.output,
         width=args.size.width,
         height=args.size.height,

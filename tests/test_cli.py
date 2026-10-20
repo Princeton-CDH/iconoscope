@@ -137,3 +137,30 @@ def test_size_tuple():
         cli.size_tuple("a")
     with pytest.raises(ValueError, match="invalid literal"):
         cli.size_tuple("10xb")
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [("60", 0.6), ("100", 1.0), ("0.5", 0.005), ("33.333333", 0.3333), ("12.5", 0.125)],
+)
+def test_percentage(value, expected):
+    assert cli.percentage(value) == expected
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "100.1", "150", "abc"])
+def test_percentage_invalid(value):
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli.percentage(value)
+
+
+def test_percentage_warns_below_one(capsys):
+    assert cli.percentage("0.6") == 0.006
+    err = capsys.readouterr().err
+    assert "Warning: 0.6 is interpreted as 0.6% of the image" in err
+    assert "use 60 for 60%" in err
+
+
+@pytest.mark.parametrize("value", ["1", "60", "100"])
+def test_percentage_no_warning(value, capsys):
+    cli.percentage(value)
+    assert capsys.readouterr().err == ""

@@ -91,11 +91,42 @@ def _(mo):
 
 
 @app.cell
-def _(DEFAULT_MODEL, ImageDataset, Path, dataset_path, mo, n_sample, np):
+def _(DEFAULT_MODEL, ImageDataset, Path, dataset_path, mo):
+    # embedding configs (model + preprocessing) stored in the dataset
     _path = Path(dataset_path.value.strip()).expanduser()
+    dataset = None
+    embedding = None
     if dataset_path.value.strip():
         mo.stop(not _path.is_file(), mo.md(f"**Dataset not found:** `{_path}`"))
-        _df = ImageDataset(storage_path=_path).load_data(model=DEFAULT_MODEL, umap=True)
+        dataset = ImageDataset(storage_path=_path)
+        _configs = {
+            c.label: c
+            for c in sorted(
+                dataset.get_configs(),
+                key=lambda c: (c.model.name, c.key != "defaults", c.key),
+            )
+        }
+        mo.stop(not _configs, mo.md("**No embedding features found in this dataset.**"))
+        # default model with default preprocessing if present, else first
+        _default = next(
+            (
+                _l
+                for _l, _c in _configs.items()
+                if _c.model == DEFAULT_MODEL and _c.key == "defaults"
+            ),
+            next(iter(_configs)),
+        )
+        embedding = mo.ui.dropdown(options=_configs, value=_default, label="Embedding")
+    embedding
+    return dataset, embedding
+
+
+@app.cell
+def _(dataset, embedding, mo, n_sample, np):
+    if dataset is not None:
+        # umap is generated (and saved) on first load for this config
+        with mo.status.spinner(f"Loading {embedding.selected_key}"):
+            _df = dataset.load_data(embedding.value, umap=True)
         # sample after loading, so umap coords are generated for all images
         # (as in generate_mosaic)
         _df = _df.sample(min(n_sample.value, _df.height))
@@ -307,10 +338,12 @@ def _(mo):
 
 
 @app.cell
-def _(Path, dataset_path, mo):
+def _(Path, dataset_path, embedding, mo):
+    # default name: dataset + model config, e.g. "mydata_clip_grayscale"
     _stem = (
-        Path(dataset_path.value.strip()).stem
-        if dataset_path.value.strip()
+        f"{Path(dataset_path.value.strip()).stem}_"
+        f"{embedding.value.model.name}_{embedding.value.key}"
+        if embedding is not None
         else "synthetic"
     )
     export_dir = mo.ui.text(
