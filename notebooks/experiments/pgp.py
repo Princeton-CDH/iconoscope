@@ -175,6 +175,10 @@ def _(image_info_df, img_dataset, mo, pl):
     n_sample = mo.ui.slider(
         20, 1000, value=150, step=10, label="Sample size", show_value=True
     )
+    # draw a new random sample with the same settings
+    resample_button = mo.ui.button(
+        label="New sample", value=0, on_click=lambda v: v + 1
+    )
     # optional document type filter; images whose shelfmark is associated with
     # several documents match if any of them has the selected type
     # options only include types present in the image data, labeled with image counts
@@ -207,11 +211,18 @@ def _(image_info_df, img_dataset, mo, pl):
     # displayed above the plot, in the same cell so they're visible in fullscreen
     controls_ui = mo.vstack(
         [
-            mo.hstack([embedding_select, n_sample], justify="start"),
+            mo.hstack([embedding_select, n_sample, resample_button], justify="start"),
             mo.hstack([doc_type_select, tag_select], justify="start"),
         ]
     )
-    return controls_ui, doc_type_select, embedding_select, n_sample, tag_select
+    return (
+        controls_ui,
+        doc_type_select,
+        embedding_select,
+        n_sample,
+        resample_button,
+        tag_select,
+    )
 
 
 @app.cell
@@ -267,7 +278,15 @@ def _(umap_meta_df):
 
 
 @app.cell
-def _(doc_type_select, n_sample, np, pl, tag_select, umap_meta_df):
+def _(
+    doc_type_select,
+    n_sample,
+    np,
+    pl,
+    resample_button,
+    tag_select,
+    umap_meta_df,
+):
     # sample after loading, so umap coords cover all images (as in generate_mosaic)
     _df = umap_meta_df
     if doc_type_select.value:
@@ -276,6 +295,8 @@ def _(doc_type_select, n_sample, np, pl, tag_select, umap_meta_df):
         _df = _df.filter(
             pl.col.tags.list.set_intersection(tag_select.value).list.len() > 0
         )
+    # referencing resample_button reruns this cell (new random sample) on click
+    resample_button.value
     sample_df = _df.sample(min(n_sample.value, _df.height))
     coords = sample_df["umap"].to_numpy().astype(np.float32)
     paths = sample_df["image_path"].to_list()
@@ -287,30 +308,6 @@ def _(doc_type_select, n_sample, np, pl, tag_select, umap_meta_df):
     # shown with the controls above the plot
     sample_summary = f"**{len(coords)}** of {_df.height} images{f' ({", ".join(_filters)})' if _filters else ''}, image aspect ratio {img_aspect:.2f}"
     return coords, img_aspect, paths, sample_df, sample_summary
-
-
-@app.cell
-def _(THUMB_PX, img_aspect, mo, paths, thumbnail_data_uri):
-    # thumbnails depend only on the sample and aspect ratio (not the
-    # canvas/grid), so layout changes don't reload them; the browser scales to the cell
-    _errors = []
-    _size = (THUMB_PX, max(1, round(THUMB_PX / img_aspect)))
-    thumbs = []
-    for _n, _p in enumerate(paths):
-        if _n % 50 == 0:
-            mo.output.replace(mo.md(f"Loading thumbnails… {_n}/{len(paths)}"))
-        try:
-            thumbs.append(thumbnail_data_uri(_p, _size))
-        except Exception as _exc:
-            thumbs.append(None)
-            _errors.append(f"{_p}: {_exc}")
-    # summary shown with the controls above the plot
-    thumb_status = (
-        f"Loaded **{sum(t is not None for t in thumbs)}/{len(thumbs)}** thumbnails."
-    )
-    if _errors:
-        thumb_status += f" First error: `{_errors[0]}`"
-    return thumb_status, thumbs
 
 
 @app.cell
@@ -345,8 +342,9 @@ def _(CANVAS_HEIGHT, CANVAS_WIDTH, coords, img_aspect, layout_mosaic, np):
 
 
 @app.cell
-def _(coords, dest, np, placed, sample_df, scale, thumbs):
-    # one record per placed image: start (sx, sy), end (dx, dy), color, optional img
+def _(coords, dest, np, placed, sample_df, scale):
+    # one record per placed image: start (sx, sy), end (dx, dy), color, label;
+    # thumbnails ("img") are added by the plot cell
     _idx = np.flatnonzero(placed)
     _src = coords[_idx] * scale
     _dst = dest[_idx]
@@ -377,7 +375,6 @@ def _(coords, dest, np, placed, sample_df, scale, thumbs):
                 int(255 * (0.35 + 0.3 * (1 - _c[k, 0]) * _c[k, 1])),
                 int(255 * _c[k, 1]),
             ),
-            "img": thumbs[i] if thumbs else None,
             "label": _label(i),
         }
         for k, i in enumerate(_idx)
@@ -400,6 +397,7 @@ def _(
     PLOT_CHROME,
     PLOT_HEIGHT,
     PLOT_MAX_WIDTH,
+    THUMB_PX,
     cell_h,
     cell_w,
     controls_ui,
@@ -409,20 +407,63 @@ def _(
     layout,
     mean_dist,
     mo,
+    np,
+    paths,
+    placed,
     points,
     sample_summary,
-    thumb_status,
+    thumbnail_data_uri,
 ):
-    # plot fits within PLOT_MAX_WIDTH x PLOT_HEIGHT, preserving canvas aspect
+    # initial size (and placeholder while loading): fits within PLOT_MAX_WIDTH x
+    # PLOT_HEIGHT, preserving canvas aspect; the plot then fills the available width
     _k = min(
         PLOT_MAX_WIDTH / layout.canvas_width,
         (PLOT_HEIGHT - PLOT_CHROME) / layout.canvas_height,
     )
+    _plot_w = round(layout.canvas_width * _k)
+    _plot_h = round(layout.canvas_height * _k) + PLOT_CHROME
+
+    # thumbnails are loaded here (not in their own cell) so loading progress shows
+    # to the right of the controls, with a placeholder the size of the plot, and
+    # the page doesn't shift; thumbnail_data_uri caches, so repeats are fast
+    _placed_paths = [paths[_i] for _i in np.flatnonzero(placed)]
+    _size = (THUMB_PX, max(1, round(THUMB_PX / img_aspect)))
+    _thumbs = []
+    _errors = []
+    for _n, _p in enumerate(_placed_paths):
+        if _n % 10 == 0:
+            mo.output.replace(
+                mo.vstack(
+                    [
+                        mo.hstack(
+                            [
+                                controls_ui,
+                                mo.md(f"Loading thumbnails… {_n}/{len(_placed_paths)}"),
+                            ],
+                            justify="start",
+                            align="center",
+                            gap=2,
+                        ),
+                        mo.Html(f'<div style="height:{_plot_h + 30}px"></div>'),
+                    ]
+                )
+            )
+        try:
+            _thumbs.append(thumbnail_data_uri(_p, _size))
+        except Exception as _exc:
+            _thumbs.append(None)
+            _errors.append(f"{_p}: {_exc}")
+    _thumb_status = (
+        f"Loaded **{sum(_t is not None for _t in _thumbs)}/{len(_thumbs)}** thumbnails."
+    )
+    if _errors:
+        _thumb_status += f" First error: `{_errors[0]}`"
+
     umap_grid_widget = mo.ui.anywidget(
         ObservablePlot(
             MORPH_JS,
             variables={
-                "points": points,
+                "points": [{**_pt, "img": _t} for _pt, _t in zip(points, _thumbs)],
                 "cols": grid_cols,
                 "rows": grid_rows,
                 "cellW": cell_w,
@@ -432,15 +473,17 @@ def _(
                 "imgAspect": img_aspect,
                 "meanDist": mean_dist,
                 "chrome": PLOT_CHROME,
+                # fill the available width; width/height below are the initial size
+                "fitWidth": True,
             },
-            width=round(layout.canvas_width * _k),
-            height=round(layout.canvas_height * _k) + PLOT_CHROME,
+            width=_plot_w,
+            height=_plot_h,
         )
     )
     mo.vstack(
         [
             controls_ui,
-            mo.md(" · ".join(_s for _s in (sample_summary, thumb_status) if _s)),
+            mo.md(f"{sample_summary} · {_thumb_status}"),
             umap_grid_widget,
         ]
     )

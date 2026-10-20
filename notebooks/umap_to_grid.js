@@ -12,6 +12,8 @@
 //   cols, rows                - grid size
 //   cellW, cellH              - cell size in mosaic pixels
 //   canvasW, canvasH          - mosaic canvas size in pixels
+//   fitWidth                  - OPTIONAL; if true, fill the available width
+//                               (width/height are then only the initial size)
 //   imgAspect, meanDist       - OPTIONAL; if defined, a summary line is shown
 //                               (image aspect ratio; mean displacement in cell diagonals)
 (() => {
@@ -148,10 +150,16 @@
   // is treated as ours (if it isn't, this plot isn't visible anyway)
   const fullscreenEl = () =>
     document.fullscreenElement || document.webkitFullscreenElement || null;
+  // OPTIONAL `fitWidth`: if true, fill the available width (height follows
+  // the canvas aspect, capped to fit in the window) instead of `width`
+  const fitWidthMode = typeof fitWidth !== "undefined" && !!fitWidth;
+  const wrapperEl = () =>
+    root.parentElement && root.parentElement.closest(".observable-plot-container");
   let pinned = null;
+  let lastAvailW = null;
   function layout() {
     const fs = fullscreenEl();
-    const wrapper = root.parentElement && root.parentElement.closest(".observable-plot-container");
+    const wrapper = wrapperEl();
     if (fs) {
       if (wrapper && pinned === null) {
         pinned = wrapper.style.width;
@@ -167,6 +175,14 @@
         : holder.offsetHeight;
       const otherH = Math.max(0, contentH - holder.offsetHeight);
       fitTo(fs.clientWidth - 2 * pad, fs.clientHeight - otherH - 2 * pad, true);
+    } else if (fitWidthMode && wrapper && wrapper.parentElement) {
+      // the widget pins the wrapper to `width`; let it fill the widget instead
+      if (pinned === null) pinned = wrapper.style.width;
+      wrapper.style.width = "100%";
+      const availW = wrapper.parentElement.clientWidth || width;
+      lastAvailW = availW;
+      const availH = Math.max(200, window.innerHeight - root.offsetHeight + holder.offsetHeight - 40);
+      fitTo(availW, Math.min(availW * canvasH / canvasW, availH));
     } else {
       if (wrapper && pinned !== null) {
         wrapper.style.width = pinned;
@@ -195,10 +211,38 @@
     if (fullscreenEl()) layout();
   };
   window.addEventListener("resize", onResize);
+  // in fitWidth mode, refit when the available width changes (window resize,
+  // sidebar toggled, ...); the plot isn't attached yet on first run, so this
+  // also does the initial fit once it is
+  let ro = null;
+  if (fitWidthMode && typeof ResizeObserver !== "undefined") {
+    let pending = false;
+    ro = new ResizeObserver(() => {
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(() => {
+        pending = false;
+        if (!root.isConnected) return cleanup();
+        if (fullscreenEl()) return;
+        const wrapper = wrapperEl();
+        const w = wrapper && wrapper.parentElement && wrapper.parentElement.clientWidth;
+        if (w && w !== lastAvailW) layout();
+      });
+    });
+    // observe once mounted (root is built detached, then swapped in)
+    const attach = () => {
+      const wrapper = wrapperEl();
+      if (wrapper && wrapper.parentElement) ro.observe(wrapper.parentElement);
+      else if (!attach.tries || attach.tries++ < 50) requestAnimationFrame(attach);
+    };
+    attach.tries = 1;
+    requestAnimationFrame(attach);
+  }
   const cleanup = () => {
     document.removeEventListener("fullscreenchange", onFullscreen);
     document.removeEventListener("webkitfullscreenchange", onFullscreen);
     window.removeEventListener("resize", onResize);
+    if (ro) ro.disconnect();
   };
 
   let raf = null, dir = 1;
