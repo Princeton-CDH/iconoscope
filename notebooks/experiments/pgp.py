@@ -1,3 +1,26 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "anywidget",
+#     "h5py",
+#     "iconoscope @ git+https://github.com/rlskoeser/iconoscope@feature/pgp-notebook",
+#     "marimo>=0.25.1",
+#     "numpy",
+#     "pillow",
+#     "polars",
+#     "traitlets",
+#     "wigglystuff>=0.5.36",
+# ]
+#
+# [tool.uv]
+# # torch etc. are only needed to generate embeddings; skip them here
+# override-dependencies = [
+#     "accelerate; sys_platform == 'never'",
+#     "torch; sys_platform == 'never'",
+#     "torchvision; sys_platform == 'never'",
+#     "transformers; sys_platform == 'never'",
+# ]
+# ///
 import marimo
 
 __generated_with = "0.25.1"
@@ -17,6 +40,7 @@ def _():
     import numpy as np
     import polars as pl
     import traitlets
+    import urllib.request
     from PIL import Image, ImageOps
     from wigglystuff import ObservablePlot
 
@@ -65,14 +89,85 @@ def _():
         re,
         render_mosaic,
         traitlets,
+        urllib,
     )
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Data
+
+    Set one of these environment variables before starting the notebook:
+
+    - **`PGP_DATA_URL`** — url (or local path) of a data tarball, e.g. the
+      sample subset made with `make_molab_subset.py`; downloaded and extracted to
+      `~/.cache/iconoscope/pgp-subset` on first use. To switch to a different
+      tarball, delete that directory.
+    - **`PGP_DATA_DIR`** — local directory with `pgp.h5`, `image_meta.csv`,
+      and images under `data/pgp-images/`
+
+    For example:
+
+    ```sh
+    PGP_DATA_URL=https://example.com/pgp-molab-subset.tar \
+      uvx marimo edit --sandbox pgp.py
+    ```
+
+    PGP document metadata is loaded from the
+    [pgp-metadata](https://github.com/princetongenizalab/pgp-metadata) repository.
+    """)
+    return
 
 
 @app.cell
-def _(ImageDataset, Path):
-    pgp_dataset_path = Path(
-        "/Users/rkoeser/workarea/experiments/20260608-pgp-vislab/pgp.h5"
+def _(Path, urllib):
+    import os
+    import tarfile
+
+    # data location from environment variables; see "Data" section above
+    # PGP document metadata is always loaded from the pgp-metadata repo
+    if os.environ.get("PGP_DATA_DIR"):
+        data_dir = Path(os.environ["PGP_DATA_DIR"]).expanduser()
+    elif os.environ.get("PGP_DATA_URL"):
+        _url = os.environ["PGP_DATA_URL"]
+        data_dir = Path.home() / ".cache" / "iconoscope" / "pgp-subset"
+        if not (data_dir / "pgp.h5").exists():
+            data_dir.mkdir(parents=True, exist_ok=True)
+            _tar_path = data_dir / "download.tar"
+            if Path(_url).expanduser().exists():
+                _tar_path = Path(_url).expanduser()
+            else:
+                urllib.request.urlretrieve(_url, _tar_path)
+            with tarfile.open(_tar_path) as _tar:
+                _tar.extractall(data_dir, filter="data")
+            if _tar_path.parent == data_dir:
+                _tar_path.unlink()
+    else:
+        raise RuntimeError(
+            "No data configured: set PGP_DATA_DIR (local data directory) or "
+            "PGP_DATA_URL (data tarball url or path) and restart the notebook"
+        )
+    documents_csv = (
+        "https://github.com/princetongenizalab/pgp-metadata/raw/main/data/documents.csv"
     )
+    image_meta_csv = data_dir / "image_meta.csv"
+    return data_dir, documents_csv, image_meta_csv
+
+
+@app.cell
+def _(ImageDataset, data_dir):
+    import h5py
+
+    pgp_dataset_path = data_dir / "pgp.h5"
+    # image paths are stored relative to image_dir; point it at this copy
+    # of the images (no-op for the original dataset)
+    _image_dir = str(data_dir / "data" / "pgp-images")
+    with h5py.File(pgp_dataset_path, "r") as _f:
+        _needs_update = _f["image"].attrs["image_dir"] != _image_dir
+    if _needs_update:
+        with h5py.File(pgp_dataset_path, "r+") as _f:
+            _f["image"].attrs["image_dir"] = _image_dir
     img_dataset = ImageDataset(pgp_dataset_path)
     return (img_dataset,)
 
@@ -85,13 +180,11 @@ def _():
 
 
 @app.cell
-def _(pl):
+def _(image_meta_csv, pl):
     # load metadata
     # TODO: this csv changes structure part way through and is not all of the files
     # also -- redundancy?
-    image_meta_df = pl.read_csv(
-        "/Users/rkoeser/workarea/experiments/20260608-pgp-vislab/image_meta.csv"
-    )
+    image_meta_df = pl.read_csv(image_meta_csv)
 
     # fix it for now
     image_meta_df = (
@@ -124,10 +217,8 @@ def _(image_meta_df):
 
 
 @app.cell
-def _(pl):
-    pgp_meta_df = pl.read_csv(
-        "/Users/rkoeser/workarea/github/pgp-metadata/data/documents.csv"
-    )
+def _(documents_csv, pl):
+    pgp_meta_df = pl.read_csv(documents_csv, infer_schema_length=None)
     # split and explode on shelfmark so we get one row per document+shelfmark combination
     pgp_meta_df = (
         pgp_meta_df.with_columns(shelfmark_list=pl.col.shelfmark.str.split(" + "))
@@ -571,10 +662,19 @@ def _(coords, dest, np, placed, sample_df, scale):
 
 
 @app.cell
-def _(ObservablePlot, mo, traitlets):
+def _(ObservablePlot, Path, mo, traitlets, urllib):
     # JS shared with ../umap_to_grid.py: builds its own controls and redraws in
     # the browser, so animation never round-trips to Python
-    MORPH_JS = (mo.notebook_dir().parent / "umap_to_grid.js").read_text()
+    # (fetched from github when the notebook is run on its own, e.g. on molab)
+    _js_path = (mo.notebook_dir() or Path.cwd()).parent / "umap_to_grid.js"
+    if _js_path.exists():
+        MORPH_JS = _js_path.read_text()
+    else:
+        with urllib.request.urlopen(
+            "https://raw.githubusercontent.com/rlskoeser/iconoscope/"
+            "feature/pgp-notebook/notebooks/umap_to_grid.js"
+        ) as _resp:
+            MORPH_JS = _resp.read().decode()
 
     class SelectablePlot(ObservablePlot):
         """ObservablePlot with a synced `selected` point id; MORPH_JS makes
