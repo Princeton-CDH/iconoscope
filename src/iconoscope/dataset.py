@@ -8,7 +8,13 @@ import h5py
 import numpy as np
 import polars as pl
 from PIL import Image
-from torch.utils.data import IterableDataset
+
+try:
+    from torch.utils.data import IterableDataset
+except ImportError:
+    # torch is only needed to generate embeddings; allow loading and
+    # exploring stored data without it (e.g. in notebooks)
+    IterableDataset = object
 
 from iconoscope.models import AVAILABLE_MODELS, EmbeddingConfig
 from iconoscope.umap import reduce_features
