@@ -8,7 +8,6 @@ app = marimo.App(width="full")
 def _():
     import base64
     import functools
-    import html
     import io
     import re
     from pathlib import Path
@@ -58,7 +57,6 @@ def _():
         anywidget,
         base64,
         functools,
-        html,
         io,
         layout_mosaic,
         mo,
@@ -275,6 +273,22 @@ def _(Image, ImageOps, base64, functools, io):
         return "data:image/jpeg;base64," + base64.b64encode(_buf.getvalue()).decode()
 
     return (thumbnail_data_uri,)
+
+
+@app.cell
+def _(Image, base64, functools, io):
+    # cached per (path, height): aspect-preserving JPEG data URI, for images
+    # shown inside widgets (which can't use marimo's file URLs)
+    @functools.cache
+    def image_data_uri(path, height):
+        with Image.open(path) as img:
+            _im = img.convert("RGB")
+            _im.thumbnail((height * 4, height), Image.LANCZOS)
+        _buf = io.BytesIO()
+        _im.save(_buf, format="JPEG", quality=85)
+        return "data:image/jpeg;base64," + base64.b64encode(_buf.getvalue()).decode()
+
+    return (image_data_uri,)
 
 
 @app.cell
@@ -777,6 +791,113 @@ def _(anywidget, traitlets):
 
 
 @app.cell(hide_code=True)
+def _(anywidget, traitlets):
+    # results grid widget: one row per model config, click a thumbnail to
+    # select it (click again to clear); hovering highlights every copy of an image
+    class NeighborGrid(anywidget.AnyWidget):
+        """Rows of neighbor thumbnails; syncs the clicked image index back to Python."""
+
+        _esm = """
+        function render({ model, el }) {
+          const grid = document.createElement("div");
+          grid.className = "nn-grid";
+          el.appendChild(grid);
+          function draw() {
+            const rows = model.get("rows");
+            const sel = model.get("selected");
+            const h = model.get("thumb_height");
+            const showCaps = model.get("show_captions");
+            grid.replaceChildren();
+            for (const row of rows) {
+              const label = document.createElement("div");
+              label.className = "nn-label";
+              const m = document.createElement("div");
+              m.className = "nn-model";
+              m.textContent = row.model;
+              label.appendChild(m);
+              for (const o of row.options) {
+                const d = document.createElement("div");
+                d.className = "nn-opt";
+                d.textContent = o;
+                label.appendChild(d);
+              }
+              const imgs = document.createElement("div");
+              imgs.className = "nn-imgs";
+              for (const t of row.thumbs) {
+                const th = document.createElement("div");
+                th.className = "nn-thumb" + (t.idx === sel ? " nn-selected" : "");
+                th.dataset.idx = t.idx;
+                th.title = t.title;
+                const img = document.createElement("img");
+                img.src = t.src;
+                img.style.height = h + "px";
+                th.appendChild(img);
+                if (showCaps) {
+                  const c = document.createElement("span");
+                  c.className = "nn-cap";
+                  c.textContent = `#${t.rank} · ${t.similarity.toFixed(3)}`;
+                  th.appendChild(c);
+                }
+                if (t.count > 1) {
+                  const b = document.createElement("span");
+                  b.className = "nn-count";
+                  b.textContent = `×${t.count}`;
+                  th.appendChild(b);
+                }
+                th.addEventListener("mouseenter", () => {
+                  grid.classList.add("nn-hovering");
+                  grid.querySelectorAll(`.nn-thumb[data-idx="${t.idx}"]`)
+                    .forEach((e) => e.classList.add("nn-hot"));
+                });
+                th.addEventListener("mouseleave", () => {
+                  grid.classList.remove("nn-hovering");
+                  grid.querySelectorAll(".nn-hot").forEach((e) => e.classList.remove("nn-hot"));
+                });
+                th.addEventListener("click", () => {
+                  model.set("selected", t.idx === model.get("selected") ? -1 : t.idx);
+                  model.save_changes();
+                });
+                imgs.appendChild(th);
+              }
+              grid.append(label, imgs);
+            }
+          }
+          for (const k of ["rows", "selected", "thumb_height", "show_captions"])
+            model.on(`change:${k}`, draw);
+          draw();
+        }
+        export default { render };
+        """
+        _css = """
+        .nn-grid { display: grid; grid-template-columns: max-content 1fr;
+          column-gap: 0.5rem; row-gap: 4px; align-items: center; }
+        .nn-label { text-align: right; font-size: 0.8rem; line-height: 1.2; }
+        .nn-model { font-weight: 600; }
+        .nn-opt { font-size: 0.7rem; opacity: 0.7; }
+        .nn-imgs { display: flex; gap: 2px; overflow-x: auto; }
+        .nn-thumb { position: relative; flex: none; cursor: pointer;
+          transition: opacity 0.1s; }
+        .nn-thumb img { margin: 0; display: block; width: auto; }
+        .nn-cap { position: absolute; left: 0; bottom: 0; padding: 0 3px;
+          font-size: 0.6rem; color: white; background: rgba(0, 0, 0, 0.55); }
+        .nn-count { position: absolute; right: 2px; top: 2px; padding: 0 4px;
+          border-radius: 8px; font-size: 0.65rem; font-weight: 600;
+          color: white; background: #ff7f0e; }
+        .nn-hovering .nn-thumb { opacity: 0.35; }
+        .nn-hovering .nn-thumb.nn-hot { opacity: 1; }
+        .nn-hovering .nn-thumb.nn-hot.nn-shared,
+        .nn-thumb.nn-hot:has(.nn-count) { outline: 3px solid #ff7f0e; outline-offset: -3px; }
+        .nn-thumb.nn-selected { outline: 3px solid #1f77b4; outline-offset: -3px; opacity: 1; }
+        """
+        rows = traitlets.List().tag(sync=True)
+        selected = traitlets.Int(-1).tag(sync=True)
+        thumb_height = traitlets.Int(120).tag(sync=True)
+        show_captions = traitlets.Bool(True).tag(sync=True)
+
+    return (NeighborGrid,)
+
+
+@app.cell(hide_code=True)
 def _(ModelPicker, img_dataset, mo, nn_models):
     # model checklist: check to show, drag (or use arrows) to reorder
     _info = img_dataset.info()["models"]
@@ -839,10 +960,20 @@ def _(image_info_df, img_dataset, mo, nn_models, np, pl):
 
 
 @app.cell
+def _(mo):
+    # starting image chosen from the results panel, stored with the random
+    # button count + filters at the time, so a new random pick or filter
+    # change replaces it
+    nn_get_start, nn_set_start = mo.state(None)
+    return nn_get_start, nn_set_start
+
+
+@app.cell
 def _(
     filter_images,
     nn_description_search,
     nn_doc_type_select,
+    nn_get_start,
     nn_image_df,
     nn_random_button,
     nn_shelfmark_search,
@@ -858,18 +989,30 @@ def _(
         description=nn_description_search.value,
         shelfmark=nn_shelfmark_search.value,
     )
-    nn_random_button.value
+    # identifies the current random pick + filters; a starting image chosen
+    # from the results panel only applies while this is unchanged
+    nn_start_token = (
+        nn_random_button.value,
+        nn_doc_type_select.value,
+        tuple(nn_tag_select.value),
+        nn_description_search.value,
+        nn_shelfmark_search.value,
+    )
+    _chosen = nn_get_start()
     # no query (None) when nothing matches; the results cell shows a warning,
     # so the filters stay visible
-    nn_query_idx = (
-        int(nn_candidates["idx"][int(np.random.randint(nn_candidates.height))])
-        if nn_candidates.height
-        else None
-    )
+    if _chosen is not None and _chosen[1] == nn_start_token:
+        nn_query_idx = _chosen[0]
+    elif nn_candidates.height:
+        nn_query_idx = int(
+            nn_candidates["idx"][int(np.random.randint(nn_candidates.height))]
+        )
+    else:
+        nn_query_idx = None
     nn_query_path = (
         nn_image_df["image_path"][nn_query_idx] if nn_query_idx is not None else None
     )
-    return nn_candidates, nn_query_idx, nn_query_path
+    return nn_candidates, nn_query_idx, nn_query_path, nn_start_token
 
 
 @app.cell
@@ -901,83 +1044,114 @@ def _(nn_features, nn_image_df, nn_k, nn_model_picker, nn_query_idx, np, pl):
 
 
 @app.cell
-def _(html, mo, nn_models, nn_neighbors, nn_show_captions, nn_thumb_size):
-    # compact grid: one row per model config, label on the left, neighbors
-    # packed tightly; rank + similarity overlaid on each thumbnail.
-    # Images returned by more than one model get a count badge, and hovering
-    # one highlights every copy across the rows.
-    def _label(name):
-        _config = nn_models[name]
-        return f"<div class='nn-model'>{_config.model.name}</div>" + "".join(
-            f"<div class='nn-opt'>{_o}</div>" for _o in _config.option_labels
-        )
-
-    # models returning each image (only images shared by 2+ models)
+def _(
+    NeighborGrid,
+    image_data_uri,
+    mo,
+    nn_models,
+    nn_neighbors,
+    nn_show_captions,
+    nn_thumb_size,
+):
+    # results grid: one row per model config; images returned by more than
+    # one model get a count badge (and are outlined together on hover)
     _returned_by = {}
     for _name, _df in nn_neighbors.items():
         for _idx in _df["idx"]:
             _returned_by.setdefault(_idx, []).append(_name)
-    _shared = {_i: _m for _i, _m in _returned_by.items() if len(_m) > 1}
-
-    def _thumb(row):
-        _img = mo.image(
-            row["image_path"],
-            style={
-                "height": f"{nn_thumb_size.value}px",
-                "width": "auto",
-                "display": "block",
-            },
-        ).text
-        _cap = (
-            f"<span class='nn-cap'>#{row['rank']} · {row['similarity']:.3f}</span>"
-            if nn_show_captions.value
-            else ""
+    # thumbnails at the max slider height, scaled down in the browser, so
+    # changing the height doesn't reload images
+    _src_h = 250
+    nn_grid = mo.ui.anywidget(
+        NeighborGrid(
+            rows=[
+                {
+                    "model": nn_models[_name].model.name,
+                    "options": nn_models[_name].option_labels,
+                    "thumbs": [
+                        {
+                            "idx": _r["idx"],
+                            "src": image_data_uri(_r["image_path"], _src_h),
+                            "rank": _r["rank"],
+                            "similarity": float(_r["similarity"]),
+                            "count": len(_returned_by[_r["idx"]]),
+                            "title": image_label(_r),
+                        }
+                        for _r in _df.iter_rows(named=True)
+                    ],
+                }
+                for _name, _df in nn_neighbors.items()
+            ],
+            thumb_height=nn_thumb_size.value,
+            show_captions=nn_show_captions.value,
         )
-        _title = image_label(row)
-        _models = _shared.get(row["idx"])
-        _badge = f"<span class='nn-count'>×{len(_models)}</span>" if _models else ""
-        return (
-            f"<div class='nn-thumb' data-idx='{row['idx']}' "
-            f"title='{html.escape(_title, quote=True)}'>{_img}{_cap}{_badge}</div>"
-        )
+    )
+    return (nn_grid,)
 
-    _rows = "".join(
-        f"<div class='nn-label'>{_label(_name)}</div>"
-        f"<div class='nn-imgs'>{''.join(_thumb(r) for r in _df.iter_rows(named=True))}</div>"
-        for _name, _df in nn_neighbors.items()
-    )
-    # hover highlighting in plain CSS: while any copy of a shared image is
-    # hovered, outline all copies and dim everything else
-    _hover_css = "\n".join(
-        f".nn-grid:has(.nn-thumb[data-idx='{_i}']:hover) .nn-thumb[data-idx='{_i}']"
-        " { outline: 3px solid #ff7f0e; outline-offset: -3px; opacity: 1; }"
-        for _i in _shared
-    )
-    # displayed with the controls, below
-    nn_results_grid = mo.Html(
-        f"""
-        <style>
-          .nn-grid {{ display: grid; grid-template-columns: max-content 1fr;
-            column-gap: 0.5rem; row-gap: 4px; align-items: center; }}
-          .nn-label {{ text-align: right; font-size: 0.8rem; line-height: 1.2; }}
-          .nn-model {{ font-weight: 600; }}
-          .nn-opt {{ font-size: 0.7rem; opacity: 0.7; }}
-          .nn-imgs {{ display: flex; gap: 2px; overflow-x: auto; }}
-          .nn-thumb {{ position: relative; flex: none; transition: opacity 0.1s; }}
-          .nn-thumb img {{ margin: 0; }}
-          .nn-cap {{ position: absolute; left: 0; bottom: 0; padding: 0 3px;
-            font-size: 0.6rem; color: white; background: rgba(0, 0, 0, 0.55); }}
-          .nn-count {{ position: absolute; right: 2px; top: 2px; padding: 0 4px;
-            border-radius: 8px; font-size: 0.65rem; font-weight: 600;
-            color: white; background: #ff7f0e; }}
-          .nn-grid:has(.nn-thumb[data-idx]:hover) .nn-thumb {{ opacity: 0.35; }}
-          .nn-thumb:hover {{ opacity: 1 !important; }}
-          {_hover_css}
-        </style>
-        <div class="nn-grid">{_rows}</div>
-        """
-    )
-    return (nn_results_grid,)
+
+@app.cell
+def _(
+    mo,
+    nn_grid,
+    nn_image_df,
+    nn_neighbors,
+    nn_set_start,
+    nn_start_token,
+    pgp_meta_df,
+    pl,
+):
+    # details + external links for the image clicked in the results grid
+    _sel = nn_grid.value["selected"]
+    if _sel < 0:
+        nn_panel = mo.md("*Click a thumbnail for details and links.*").style(
+            {"font-size": "0.85em", "opacity": "0.7"}
+        )
+    else:
+        _row = nn_image_df.row(_sel, named=True)
+        # PGP documents on this image's shelfmark
+        _docs = (
+            pgp_meta_df.filter(pl.col.pgpid.is_in(_row["pgpids"] or []))
+            .unique("pgpid")
+            .sort("pgpid")
+        )
+        _doc_md = [
+            f"- [PGPID {_d['pgpid']}]({_d['url']}){' · ' + _d['type'] if _d['type'] else ''}"
+            + (
+                f"  \n  {_d['description'][:240]}{'…' if len(_d['description']) > 240 else ''}"
+                if _d["description"]
+                else ""
+            )
+            for _d in _docs.iter_rows(named=True)
+        ]
+        # rank of this image for each shown model
+        _ranks = [
+            f"{_name} #{_df.filter(pl.col.idx == _sel)['rank'][0]}"
+            for _name, _df in nn_neighbors.items()
+            if _sel in _df["idx"]
+        ]
+        _use = mo.ui.button(
+            label="Use as starting image",
+            on_click=lambda _: nn_set_start((_sel, nn_start_token)),
+        )
+        nn_panel = mo.vstack(
+            [
+                mo.image(
+                    _row["image_path"],
+                    style={"max-height": "300px", "max-width": "100%", "width": "auto"},
+                ),
+                mo.md(
+                    f"**{_row['shelfmark'] or 'No shelfmark match'}**"
+                    + (f" · {_row['doc_type']}" if _row["doc_type"] else "")
+                    + "\n\n"
+                    + ("\n".join(_doc_md) if _doc_md else "*No linked PGP documents.*")
+                    + "\n\n"
+                    + f"<small>Ranked by: {', '.join(_ranks)}</small>"
+                ).style({"font-size": "0.85em"}),
+                _use,
+            ],
+            align="start",
+        )
+    return (nn_panel,)
 
 
 @app.cell
@@ -986,14 +1160,15 @@ def _(
     nn_candidates,
     nn_description_search,
     nn_doc_type_select,
+    nn_grid,
     nn_image_df,
     nn_k,
     nn_model_picker,
     nn_neighbors,
+    nn_panel,
     nn_query_idx,
     nn_query_path,
     nn_random_button,
-    nn_results_grid,
     nn_selected_models,
     nn_shelfmark_search,
     nn_show_captions,
@@ -1040,7 +1215,7 @@ def _(
           <div>
             <b>#2</b> rank · <b>0.913</b> cosine similarity to the starting image<br>
             <span style="color:#ff7f0e; font-weight:600;">×3</span> returned by 3 of the shown models;
-            hover to outline every copy
+            hover to outline every copy; click for details and links
           </div>
         </div>
         """
@@ -1069,7 +1244,7 @@ def _(
     if nn_query_idx is not None and not nn_selected_models:
         _results = mo.callout(mo.md("Select at least one model."), kind="warn")
     else:
-        _results = nn_results_grid
+        _results = nn_grid
     mo.vstack(
         [
             _filter_ui,
@@ -1100,7 +1275,9 @@ def _(
                         # keep its natural width (no shrinking under the results)
                     ).style({"flex": "none", "max-width": "420px"}),
                     # results take the remaining width; rows scroll individually
-                    mo.Html(_results.text).style({"flex": "1 1 0", "min-width": "0"}),
+                    mo.vstack([_results]).style({"flex": "1 1 0", "min-width": "0"}),
+                    # details + links for the clicked thumbnail
+                    mo.vstack([nn_panel]).style({"flex": "none", "width": "320px"}),
                 ],
                 justify="start",
                 align="start",
