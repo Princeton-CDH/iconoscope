@@ -21,6 +21,7 @@
 #     "transformers; sys_platform == 'never'",
 # ]
 # ///
+
 import marimo
 
 __generated_with = "0.25.1"
@@ -128,14 +129,12 @@ def _(mo):
     mo.md(r"""
     ## Data
 
-    By default, the notebook downloads a random sample of 500 PGP images with
-    metadata (about 28 MB), and extracts it to `~/.cache/iconoscope/pgp-subset`
-    on first use. To use other data, set one of these environment variables
-    before starting the notebook:
+    Set one of these environment variables before starting the notebook:
 
-    - **`PGP_DATA_URL`** — url (or local path) of a data tarball made with
-      `make_molab_subset.py`. To switch to a different tarball, delete
-      the cache directory.
+    - **`PGP_DATA_URL`** — url (or local path) of a data tarball, e.g. the
+      sample subset made with `make_molab_subset.py`; downloaded and extracted to
+      `~/.cache/iconoscope/pgp-subset` on first use. To switch to a different
+      tarball, delete that directory.
     - **`PGP_DATA_DIR`** — local directory with `pgp.h5`, `image_meta.csv`,
       and images under `data/pgp-images/`
 
@@ -157,17 +156,12 @@ def _(Path, urllib):
     import os
     import tarfile
 
-    # data location: environment variables or default subset; see "Data" above
+    # data location from environment variables; see "Data" section above
     # PGP document metadata is always loaded from the pgp-metadata repo
     if os.environ.get("PGP_DATA_DIR"):
         data_dir = Path(os.environ["PGP_DATA_DIR"]).expanduser()
-    else:
-        # default: sample subset (500 images), shared via google drive
-        _url = os.environ.get(
-            "PGP_DATA_URL",
-            "https://drive.usercontent.google.com/download"
-            "?id=1JN2j-OxDz1QfJWwKsPMSGxwwlJZoQR7j&export=download",
-        )
+    elif os.environ.get("PGP_DATA_URL"):
+        _url = os.environ["PGP_DATA_URL"]
         data_dir = Path.home() / ".cache" / "iconoscope" / "pgp-subset"
         if not (data_dir / "pgp.h5").exists():
             data_dir.mkdir(parents=True, exist_ok=True)
@@ -180,6 +174,11 @@ def _(Path, urllib):
                 _tar.extractall(data_dir, filter="data")
             if _tar_path.parent == data_dir:
                 _tar_path.unlink()
+    else:
+        raise RuntimeError(
+            "No data configured: set PGP_DATA_DIR (local data directory) or "
+            "PGP_DATA_URL (data tarball url or path) and restart the notebook"
+        )
     documents_csv = (
         "https://github.com/princetongenizalab/pgp-metadata/raw/main/data/documents.csv"
     )
@@ -444,8 +443,6 @@ def _(pgp_meta_df, pl):
                 )
             _items.append(_item)
         _head = f"**{meta.get('shelfmark') or 'No shelfmark match'}**"
-        if meta.get("doc_type"):
-            _head += f" · {meta['doc_type']}"
         return (
             _head
             + "\n\n"
