@@ -6,6 +6,7 @@
 #     "iconoscope @ git+https://github.com/rlskoeser/iconoscope@feature/pgp-notebook",
 #     "marimo>=0.25.1",
 #     "numpy",
+#     "piffle",
 #     "pillow",
 #     "polars",
 #     "traitlets",
@@ -64,6 +65,7 @@ def _():
     import functools
     import io
     import re
+    import urllib.request
     from pathlib import Path
 
     import anywidget
@@ -71,7 +73,7 @@ def _():
     import numpy as np
     import polars as pl
     import traitlets
-    import urllib.request
+    from piffle.image import IIIFImageClient
     from PIL import Image, ImageOps
     from wigglystuff import ObservablePlot
 
@@ -98,6 +100,7 @@ def _():
     return (
         CANVAS_HEIGHT,
         CANVAS_WIDTH,
+        IIIFImageClient,
         Image,
         ImageDataset,
         ImageOps,
@@ -135,8 +138,14 @@ def _(mo):
       sample subset made with `make_molab_subset.py`; downloaded and extracted to
       `~/.cache/iconoscope/pgp-subset` on first use. To switch to a different
       tarball, delete that directory.
-    - **`PGP_DATA_DIR`** — local directory with `pgp.h5`, `image_meta.csv`,
-      and images under `data/pgp-images/`
+    - **`PGP_DATA_DIR`** — local directory with images under `data/pgp-images/`
+      and the dataset + image metadata files: `pgp.h5` and `image_meta.csv`, or
+      override the filenames with **`PGP_DATASET`** (e.g. `pgp_v2.h5`) and
+      **`PGP_IMAGE_META`** (e.g. `image_meta_v2.parquet`, which includes IIIF
+      image urls)
+
+    When the image metadata includes IIIF image urls, check *Use IIIF images* to
+    load images from the IIIF image server instead of local files.
 
     For example:
 
@@ -160,9 +169,14 @@ def _(Path, urllib):
     # PGP document metadata is always loaded from the pgp-metadata repo
     if os.environ.get("PGP_DATA_DIR"):
         data_dir = Path(os.environ["PGP_DATA_DIR"]).expanduser()
+        # optional dataset / metadata filenames within the data dir
+        dataset_name = os.environ.get("PGP_DATASET", "pgp.h5")
+        image_meta_name = os.environ.get("PGP_IMAGE_META", "image_meta.csv")
     elif os.environ.get("PGP_DATA_URL"):
         _url = os.environ["PGP_DATA_URL"]
         data_dir = Path.home() / ".cache" / "iconoscope" / "pgp-subset"
+        dataset_name = "pgp.h5"
+        image_meta_name = "image_meta.csv"
         if not (data_dir / "pgp.h5").exists():
             data_dir.mkdir(parents=True, exist_ok=True)
             _tar_path = data_dir / "download.tar"
@@ -182,15 +196,15 @@ def _(Path, urllib):
     documents_csv = (
         "https://github.com/princetongenizalab/pgp-metadata/raw/main/data/documents.csv"
     )
-    image_meta_csv = data_dir / "image_meta.csv"
-    return data_dir, documents_csv, image_meta_csv
+    image_meta_path = data_dir / image_meta_name
+    return data_dir, dataset_name, documents_csv, image_meta_path
 
 
 @app.cell
-def _(ImageDataset, data_dir):
+def _(ImageDataset, data_dir, dataset_name):
     import h5py
 
-    pgp_dataset_path = data_dir / "pgp.h5"
+    pgp_dataset_path = data_dir / dataset_name
     # image paths are stored relative to image_dir; point it at this copy
     # of the images (no-op for the original dataset)
     _image_dir = str(data_dir / "data" / "pgp-images")
@@ -204,26 +218,32 @@ def _(ImageDataset, data_dir):
 
 
 @app.cell
-def _(image_meta_csv, pl):
-    # load metadata
-    # TODO: this csv changes structure part way through and is not all of the files
-    # also -- redundancy?
-    image_meta_df = pl.read_csv(image_meta_csv)
-
-    # fix it for now
-    image_meta_df = (
-        image_meta_df.with_columns(
-            real_path=pl.when(pl.col.image_path.str.starts_with("data/pgp-"))
-            .then(pl.col.image_path)
-            .otherwise(pl.col.shelfmark),
-            real_shelfmark=pl.when(pl.col.image_path.str.starts_with("data/pgp-"))
-            .then(pl.col.shelfmark)
-            .otherwise(pl.col.image_path),
+def _(image_meta_path, pl):
+    # load image metadata (csv or parquet)
+    if image_meta_path.suffix == ".parquet":
+        # v2 metadata: clean columns, including IIIF image urls
+        image_meta_df = pl.read_parquet(image_meta_path)
+    else:
+        # TODO: this csv changes structure part way through and is not all of the files
+        image_meta_df = pl.read_csv(image_meta_path)
+        # fix swapped image_path / shelfmark columns
+        image_meta_df = (
+            image_meta_df.with_columns(
+                real_path=pl.when(pl.col.image_path.str.starts_with("data/pgp-"))
+                .then(pl.col.image_path)
+                .otherwise(pl.col.shelfmark),
+                real_shelfmark=pl.when(pl.col.image_path.str.starts_with("data/pgp-"))
+                .then(pl.col.shelfmark)
+                .otherwise(pl.col.image_path),
+            )
+            .drop("image_path", "shelfmark")
+            .rename({"real_path": "image_path", "real_shelfmark": "shelfmark"})
         )
-        .drop("image_path", "shelfmark")
-        .rename({"real_path": "image_path", "real_shelfmark": "shelfmark"})
-    )
-    return (image_meta_df,)
+    # IIIF image service url, when available (null otherwise)
+    if "iiif_image" not in image_meta_df.columns:
+        image_meta_df = image_meta_df.with_columns(iiif_image=pl.lit(None, pl.String))
+    has_iiif = image_meta_df["iiif_image"].is_not_null().any()
+    return has_iiif, image_meta_df
 
 
 @app.cell
@@ -242,7 +262,9 @@ def _(documents_csv, pl):
 def _(image_meta_df, pgp_meta_df, pl):
     # one row per image (image_meta lists some images more than once), with
     # PGP document info attached by shelfmark
-    _img = image_meta_df.select("image_path", "shelfmark").unique()
+    _img = image_meta_df.select("image_path", "shelfmark", "iiif_image").unique(
+        "image_path", keep="first"
+    )
     _docs = (
         pgp_meta_df.with_columns(
             # tags are a comma-separated string per document
@@ -280,7 +302,7 @@ def _(mo):
 
 
 @app.cell
-def _(image_info_df, img_dataset, mo, pl):
+def _(image_info_df, img_dataset, mo, pl, use_iiif):
     _configs = img_dataset.configs_by_label()
     embedding_select = mo.ui.dropdown(
         options=_configs, value=list(_configs.keys())[0], label="Embedding"
@@ -331,7 +353,10 @@ def _(image_info_df, img_dataset, mo, pl):
     # displayed above the plot, in the same cell so they're visible in fullscreen
     controls_ui = mo.vstack(
         [
-            mo.hstack([embedding_select, n_sample, resample_button], justify="start"),
+            mo.hstack(
+                [embedding_select, n_sample, resample_button, use_iiif],
+                justify="start",
+            ),
             mo.hstack(
                 [doc_type_select, tag_select, description_search], justify="start"
             ),
@@ -406,6 +431,34 @@ def _(pl):
         return df
 
     return (filter_images,)
+
+
+@app.cell
+def _(IIIFImageClient, has_iiif, mo):
+    # load images from the IIIF image server instead of local files, when
+    # the metadata has IIIF urls (disabled otherwise)
+    use_iiif = mo.ui.checkbox(
+        value=False,
+        label="Use IIIF images",
+        disabled=not has_iiif,
+    )
+
+    def iiif_url(base, width=None, height=None, fit=False):
+        """IIIF Image API url for a scaled full image, from the image service
+        base url; with ``fit``, scale to fit within width x height (preserving
+        aspect ratio)"""
+        _endpoint, _image_id = base.rstrip("/").rsplit("/", 1)
+        _img = IIIFImageClient(api_endpoint=_endpoint, image_id=_image_id)
+        return str(_img.size(width=width, height=height, exact=fit))
+
+    def image_src(row, height):
+        """IIIF url when enabled and available for this image, otherwise the
+        local image path"""
+        if use_iiif.value and row.get("iiif_image"):
+            return iiif_url(row["iiif_image"], height=height)
+        return row["image_path"]
+
+    return iiif_url, image_src, use_iiif
 
 
 @app.function
@@ -630,7 +683,7 @@ def _(coords, dest, np, placed, sample_df, scale):
     _src = coords[_idx] * scale
     _dst = dest[_idx]
     _c = coords[_idx]
-    _meta = sample_df.select("shelfmark", "pgpids", "doc_type").to_dicts()
+    _meta = sample_df.select("shelfmark", "pgpids", "doc_type", "iiif_image").to_dicts()
 
     points = [
         {
@@ -689,6 +742,7 @@ def _(
     cell_w,
     grid_cols,
     grid_rows,
+    iiif_url,
     img_aspect,
     layout,
     mean_dist,
@@ -697,7 +751,9 @@ def _(
     paths,
     placed,
     points,
+    sample_df,
     thumbnail_data_uri,
+    use_iiif,
 ):
     # initial size: fits within PLOT_MAX_WIDTH x
     # PLOT_HEIGHT, preserving canvas aspect; the plot then fills the available width
@@ -715,11 +771,18 @@ def _(
     _size = (THUMB_PX, max(1, round(THUMB_PX / img_aspect)))
     _thumbs = []
     _errors = []
-    for _p in mo.status.progress_bar(
-        _placed_paths, title="Loading thumbnails", remove_on_exit=True
+    _placed_iiif = sample_df["iiif_image"].gather(np.flatnonzero(placed)).to_list()
+    for _p, _iiif in mo.status.progress_bar(
+        list(zip(_placed_paths, _placed_iiif)),
+        title="Loading thumbnails",
+        remove_on_exit=True,
     ):
         try:
-            _thumbs.append(thumbnail_data_uri(_p, _size))
+            if use_iiif.value and _iiif:
+                # loaded by the browser; the plot crops to the cell
+                _thumbs.append(iiif_url(_iiif, width=THUMB_PX))
+            else:
+                _thumbs.append(thumbnail_data_uri(_p, _size))
         except Exception as _exc:
             _thumbs.append(None)
             _errors.append(f"{_p}: {_exc}")
@@ -759,6 +822,7 @@ def _(
 def _(
     controls_ui,
     document_links_md,
+    image_src,
     mo,
     mosaic_download,
     nn_image_df,
@@ -788,7 +852,7 @@ def _(
         umap_panel = mo.vstack(
             [
                 mo.image(
-                    _row["image_path"],
+                    image_src(_row, 600),
                     style={"max-height": "300px", "max-width": "100%", "width": "auto"},
                 ),
                 mo.md(document_links_md(_row)).style({"font-size": "0.85em"}),
@@ -1185,10 +1249,7 @@ def _(
         )
     else:
         nn_query_idx = None
-    nn_query_path = (
-        nn_image_df["image_path"][nn_query_idx] if nn_query_idx is not None else None
-    )
-    return nn_candidates, nn_query_idx, nn_query_path, nn_start_token
+    return nn_candidates, nn_query_idx, nn_start_token
 
 
 @app.cell
@@ -1212,7 +1273,9 @@ def _(nn_features, nn_image_df, nn_k, nn_model_picker, nn_query_idx, np, pl):
         nn_neighbors[_name] = pl.DataFrame(
             {"idx": _top, "rank": np.arange(1, _k + 1), "similarity": _sims[_top]}
         ).join(
-            nn_image_df.select("idx", "image_path", "shelfmark", "pgpids", "doc_type"),
+            nn_image_df.select(
+                "idx", "image_path", "shelfmark", "pgpids", "doc_type", "iiif_image"
+            ),
             on="idx",
             how="left",
         )
@@ -1222,12 +1285,14 @@ def _(nn_features, nn_image_df, nn_k, nn_model_picker, nn_query_idx, np, pl):
 @app.cell
 def _(
     NeighborGrid,
+    iiif_url,
     image_data_uri,
     mo,
     nn_models,
     nn_neighbors,
     nn_show_captions,
     nn_thumb_size,
+    use_iiif,
 ):
     # results grid: one row per model config; images returned by more than
     # one model get a count badge (and are outlined together on hover)
@@ -1247,7 +1312,11 @@ def _(
                     "thumbs": [
                         {
                             "idx": _r["idx"],
-                            "src": image_data_uri(_r["image_path"], _src_h),
+                            "src": (
+                                iiif_url(_r["iiif_image"], height=_src_h)
+                                if use_iiif.value and _r["iiif_image"]
+                                else image_data_uri(_r["image_path"], _src_h)
+                            ),
                             "rank": _r["rank"],
                             "similarity": float(_r["similarity"]),
                             "count": len(_returned_by[_r["idx"]]),
@@ -1268,6 +1337,7 @@ def _(
 @app.cell
 def _(
     document_links_md,
+    image_src,
     mo,
     nn_grid,
     nn_image_df,
@@ -1297,7 +1367,7 @@ def _(
         nn_panel = mo.vstack(
             [
                 mo.image(
-                    _row["image_path"],
+                    image_src(_row, 600),
                     style={"max-height": "300px", "max-width": "100%", "width": "auto"},
                 ),
                 mo.md(
@@ -1315,6 +1385,7 @@ def _(
 @app.cell
 def _(
     document_links_md,
+    image_src,
     mo,
     nn_candidates,
     nn_description_search,
@@ -1326,13 +1397,13 @@ def _(
     nn_neighbors,
     nn_panel,
     nn_query_idx,
-    nn_query_path,
     nn_random_button,
     nn_selected_models,
     nn_shelfmark_search,
     nn_show_captions,
     nn_tag_select,
     nn_thumb_size,
+    use_iiif,
 ):
     # filters and controls, then query image (with document metadata below)
     # and model picker next to the neighbors, in one output, so everything is visible in fullscreen
@@ -1386,7 +1457,7 @@ def _(
             [
                 mo.md("**Starting image**"),
                 mo.image(
-                    nn_query_path,
+                    image_src(nn_image_df.row(nn_query_idx, named=True), 500),
                     style={
                         "height": "250px",
                         "width": "auto",
@@ -1410,7 +1481,14 @@ def _(
             _filter_ui,
             # display controls in one row, to leave vertical space for results
             mo.hstack(
-                [nn_random_button, nn_k, nn_thumb_size, nn_show_captions, _legend],
+                [
+                    nn_random_button,
+                    nn_k,
+                    nn_thumb_size,
+                    nn_show_captions,
+                    use_iiif,
+                    _legend,
+                ],
                 justify="start",
                 align="center",
                 gap=2,

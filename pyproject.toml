@@ -43,6 +43,7 @@ iconoscope = "iconoscope.cli:main"
 dev = [
     "altair>=6.3.0",
     "marimo>=0.25.1",
+    "piffle>=0.9.0",
     "pytest>=8.0",
     "pytest-cov>=7.1.0",
     "wigglystuff>=0.5.36",
