@@ -413,7 +413,8 @@ def _(
     coords = sample_df["umap"].to_numpy().astype(np.float32)
     # same rule as generate_mosaic: most common aspect ratio in the data
     img_aspect = float(sample_df["aspect_ratio"].mode()[0])
-    _filters = (
+    # active filters, for the summary and mosaic download
+    active_filters = (
         ([doc_type_select.value] if doc_type_select.value else [])
         + list(tag_select.value)
         + (
@@ -423,15 +424,15 @@ def _(
         )
     )
     # shown with the controls above the plot
-    sample_summary = f"**{len(coords)}** of {filtered_df.height} images{f' ({", ".join(_filters)})' if _filters else ''}, image aspect ratio {img_aspect:.2f}"
-    return coords, filtered_df, img_aspect, sample_df, sample_summary
+    sample_summary = f"**{len(coords)}** of {filtered_df.height} images{f' ({", ".join(active_filters)})' if active_filters else ''}, image aspect ratio {img_aspect:.2f}"
+    return active_filters, coords, filtered_df, img_aspect, sample_df, sample_summary
 
 
 @app.cell
 def _(
     MOSAIC_CELL_WIDTH,
     MOSAIC_MAX_WIDTH,
-    doc_type_select,
+    active_filters,
     embedding_select,
     filtered_df,
     io,
@@ -439,7 +440,6 @@ def _(
     np,
     re,
     render_mosaic,
-    tag_select,
 ):
     # download a grid mosaic of every image in the current filtered set, using
     # the same layout and rendering as the mosaic command; generated on click
@@ -462,18 +462,19 @@ def _(
         return _buf.getvalue()
 
     def _mosaic_filename():
-        _parts = ["mosaic", embedding_select.selected_key]
-        if doc_type_select.value:
-            _parts.append(doc_type_select.value)
-        _parts.extend(tag_select.value)
-        _parts.append(str(filtered_df.height))
+        _parts = [
+            "mosaic",
+            embedding_select.selected_key,
+            *active_filters,
+            str(filtered_df.height),
+        ]
         return (
             "_".join(re.sub(r"[^A-Za-z0-9.=-]+", "-", _p).strip("-") for _p in _parts)
             + ".jpg"
         )
 
     # only for a filtered set; the full dataset is too large for one image
-    _filtered = bool(doc_type_select.value or tag_select.value)
+    _filtered = bool(active_filters)
     _download_button = mo.download(
         data=_mosaic_jpeg,
         filename=_mosaic_filename,
@@ -487,7 +488,11 @@ def _(
         + (
             []
             if _filtered
-            else [mo.md("*Filter by document type or keyword to download a mosaic*")]
+            else [
+                mo.md(
+                    "*Filter by document type, keyword, or description to download a mosaic*"
+                )
+            ]
         ),
         justify="start",
         align="center",
