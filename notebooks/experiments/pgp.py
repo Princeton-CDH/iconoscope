@@ -429,7 +429,7 @@ def _(embedding_select, img_dataset, mo):
 
 
 @app.cell
-def _(image_info_df, mo, pl, umap_df):
+def _(image_info_df, mo, pl, require_iiif, umap_df):
     # attach metadata to dataset images; dataset paths are absolute, metadata
     # paths are relative to the experiment dir (data/pgp-images/...)
     umap_meta_df = (
@@ -443,9 +443,18 @@ def _(image_info_df, mo, pl, umap_df):
         )
         .drop("_rel_path")
     )
+    _total = umap_meta_df.height
+    # without local images, only images with a IIIF url can be shown
+    if require_iiif:
+        umap_meta_df = umap_meta_df.filter(pl.col.iiif_image.is_not_null())
     mo.md(
         f"Metadata found for **{umap_meta_df['shelfmark'].is_not_null().sum()}** of {umap_meta_df.height} images; "
         f"PGP document match for **{umap_meta_df['pgpids'].is_not_null().sum()}**"
+        + (
+            f"; {_total - umap_meta_df.height} images without IIIF urls excluded"
+            if require_iiif
+            else ""
+        )
     )
     return (umap_meta_df,)
 
@@ -776,7 +785,7 @@ def _(ModelPicker, img_dataset, mo, nn_models):
 
 
 @app.cell
-def _(image_info_df, img_dataset, mo, nn_models, np, pl):
+def _(image_info_df, img_dataset, mo, nn_models, np, pl, require_iiif):
     # load paths once, then L2-normalized features for each model, so
     # dot product == cosine similarity
     # with document metadata (as for umap_meta_df) for hover labels
@@ -792,6 +801,14 @@ def _(image_info_df, img_dataset, mo, nn_models, np, pl):
         .drop("_rel_path")
         .sort("idx")
     )
+    # images that can be shown; without local images, only those with a IIIF
+    # url. Others stay in nn_image_df (idx == feature row) but are never
+    # picked as starting image or returned as neighbors
+    nn_viewable = (
+        nn_image_df["iiif_image"].is_not_null().to_numpy()
+        if require_iiif
+        else np.ones(nn_image_df.height, dtype=bool)
+    )
     nn_features = {}
     with mo.status.progress_bar(
         total=len(nn_models), title="Loading embeddings", remove_on_exit=True
@@ -805,7 +822,7 @@ def _(image_info_df, img_dataset, mo, nn_models, np, pl):
             _feats /= np.linalg.norm(_feats, axis=1, keepdims=True).clip(min=1e-12)
             nn_features[_label] = _feats
             _bar.update()
-    return nn_features, nn_image_df
+    return nn_features, nn_image_df, nn_viewable
 
 
 @app.cell
@@ -827,12 +844,13 @@ def _(
     nn_random_button,
     nn_shelfmark_search,
     nn_tag_select,
+    nn_viewable,
     np,
 ):
     # images matching the filters; a random one is the query, and a new one is
     # picked when the button is clicked
     nn_candidates = filter_images(
-        nn_image_df,
+        nn_image_df.filter(nn_viewable),
         doc_type=nn_doc_type_select.value,
         tags=nn_tag_select.value,
         description=nn_description_search.value,
@@ -862,7 +880,16 @@ def _(
 
 
 @app.cell
-def _(nn_features, nn_image_df, nn_k, nn_model_picker, nn_query_idx, np, pl):
+def _(
+    nn_features,
+    nn_image_df,
+    nn_k,
+    nn_model_picker,
+    nn_query_idx,
+    nn_viewable,
+    np,
+    pl,
+):
     # nearest neighbors per selected model (excluding the query image itself)
     nn_neighbors = {}
     # empty when there's no query image
@@ -876,6 +903,7 @@ def _(nn_features, nn_image_df, nn_k, nn_model_picker, nn_query_idx, np, pl):
         _feats = nn_features[_name]
         _sims = _feats @ _feats[nn_query_idx]
         _sims[nn_query_idx] = -np.inf
+        _sims[~nn_viewable] = -np.inf
         _k = nn_k.value
         _top = np.argpartition(-_sims, _k)[:_k]
         _top = _top[np.argsort(-_sims[_top])]
@@ -1357,7 +1385,12 @@ def _(mo):
     mo.md(r"""
     ## Data
 
-    Set one of these environment variables before starting the notebook:
+    By default, the iconoscope dataset (`pgp_v2.h5`, embeddings only) and image
+    metadata with IIIF urls (`image_meta_v2.parquet`) are downloaded to
+    `~/.cache/iconoscope/pgp-default` on first use, and images are loaded from
+    IIIF. Override the download urls with **`PGP_DATASET_URL`** and
+    **`PGP_IMAGE_META_URL`**, or use other data by setting one of these
+    environment variables before starting the notebook:
 
     - **`PGP_DATA_URL`** — url (or local path) of a data tarball, e.g. the
       sample subset made with `make_molab_subset.py`; downloaded and extracted to
@@ -1454,9 +1487,33 @@ def _():
 
 
 @app.cell
-def _(Path, urllib):
+def _(Path, mo, urllib):
     import os
     import tarfile
+
+    # default data, used when no data environment variables are set: the
+    # iconoscope dataset (embeddings, no images) and image metadata with IIIF
+    # urls, so images load from IIIF; both downloaded on first use.
+    # (confirm=t skips google drive's virus scan page for large files)
+    DEFAULT_DATASET_URL = (
+        "https://drive.usercontent.google.com/download"
+        "?id=14uVPRbLH3FdeACFoMolr0yTshvPeOA03&export=download&confirm=t"
+    )
+    DEFAULT_IMAGE_META_URL = (
+        "https://drive.usercontent.google.com/download"
+        "?id=1pKNxMuBflEh1W0GhhzIbng2-e3_CkPlY&export=download&confirm=t"
+    )
+
+    def _download(url, dest):
+        """download url to dest, unless it already exists (via a temporary
+        file, so an interrupted download isn't mistaken for a complete one)"""
+        if dest.exists():
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _tmp = dest.with_name(dest.name + ".part")
+        with mo.status.spinner(f"Downloading {dest.name} (first run only)"):
+            urllib.request.urlretrieve(url, _tmp)
+        _tmp.rename(dest)
 
     # data location from environment variables; see "Data" section above
     # PGP document metadata is always loaded from the pgp-metadata repo
@@ -1482,9 +1539,18 @@ def _(Path, urllib):
             if _tar_path.parent == data_dir:
                 _tar_path.unlink()
     else:
-        raise RuntimeError(
-            "No data configured: set PGP_DATA_DIR (local data directory) or "
-            "PGP_DATA_URL (data tarball url or path) and restart the notebook"
+        # default: separate dataset + image metadata downloads (urls can be
+        # overridden with PGP_DATASET_URL / PGP_IMAGE_META_URL)
+        data_dir = Path.home() / ".cache" / "iconoscope" / "pgp-default"
+        dataset_name = "pgp_v2.h5"
+        image_meta_name = "image_meta_v2.parquet"
+        _download(
+            os.environ.get("PGP_DATASET_URL", DEFAULT_DATASET_URL),
+            data_dir / dataset_name,
+        )
+        _download(
+            os.environ.get("PGP_IMAGE_META_URL", DEFAULT_IMAGE_META_URL),
+            data_dir / image_meta_name,
         )
     documents_csv = (
         "https://github.com/princetongenizalab/pgp-metadata/raw/main/data/documents.csv"
@@ -1511,7 +1577,7 @@ def _(ImageDataset, data_dir, dataset_name):
 
 
 @app.cell
-def _(image_meta_path, pl):
+def _(data_dir, image_meta_path, pl):
     # load image metadata (csv or parquet)
     if image_meta_path.suffix == ".parquet":
         # v2 metadata: clean columns, including IIIF image urls
@@ -1536,7 +1602,10 @@ def _(image_meta_path, pl):
     if "iiif_image" not in image_meta_df.columns:
         image_meta_df = image_meta_df.with_columns(iiif_image=pl.lit(None, pl.String))
     has_iiif = image_meta_df["iiif_image"].is_not_null().any()
-    return has_iiif, image_meta_df
+    # without local image files (e.g. the default download), images can only
+    # be shown from IIIF, so images without a IIIF url are filtered out
+    require_iiif = has_iiif and not (data_dir / "data" / "pgp-images").is_dir()
+    return has_iiif, image_meta_df, require_iiif
 
 
 @app.cell
