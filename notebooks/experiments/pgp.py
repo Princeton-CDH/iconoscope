@@ -160,6 +160,22 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo, use_iiif):
+    # one image source setting for both the UMAP plot and similarity search
+    mo.vstack(
+        [
+            use_iiif,
+            mo.md(
+                "<small>Applies to both the UMAP plot and similarity search. "
+                "Images whose local file is missing load from IIIF "
+                "regardless.</small>"
+            ).style({"opacity": "0.7"}),
+        ]
+    )
+    return
+
+
 @app.cell
 def _(Path, urllib):
     import os
@@ -302,7 +318,7 @@ def _(mo):
 
 
 @app.cell
-def _(image_info_df, img_dataset, mo, pl, use_iiif):
+def _(image_info_df, img_dataset, mo, pl):
     _configs = img_dataset.configs_by_label()
     embedding_select = mo.ui.dropdown(
         options=_configs, value=list(_configs.keys())[0], label="Embedding"
@@ -353,10 +369,7 @@ def _(image_info_df, img_dataset, mo, pl, use_iiif):
     # displayed above the plot, in the same cell so they're visible in fullscreen
     controls_ui = mo.vstack(
         [
-            mo.hstack(
-                [embedding_select, n_sample, resample_button, use_iiif],
-                justify="start",
-            ),
+            mo.hstack([embedding_select, n_sample, resample_button], justify="start"),
             mo.hstack(
                 [doc_type_select, tag_select, description_search], justify="start"
             ),
@@ -434,11 +447,12 @@ def _(pl):
 
 
 @app.cell
-def _(IIIFImageClient, has_iiif, mo):
+def _(IIIFImageClient, Path, data_dir, has_iiif, mo):
     # load images from the IIIF image server instead of local files, when
-    # the metadata has IIIF urls (disabled otherwise)
+    # the metadata has IIIF urls (disabled otherwise); on by default when the
+    # local image files aren't present
     use_iiif = mo.ui.checkbox(
-        value=False,
+        value=has_iiif and not (data_dir / "data" / "pgp-images").is_dir(),
         label="Use IIIF images",
         disabled=not has_iiif,
     )
@@ -451,14 +465,19 @@ def _(IIIFImageClient, has_iiif, mo):
         _img = IIIFImageClient(api_endpoint=_endpoint, image_id=_image_id)
         return str(_img.size(width=width, height=height, exact=fit))
 
+    def prefer_iiif(path, iiif):
+        """whether to load an image via IIIF: when it has a IIIF url and either
+        IIIF is enabled or the local file is missing"""
+        return bool(iiif) and (use_iiif.value or not Path(path).exists())
+
     def image_src(row, height):
-        """IIIF url when enabled and available for this image, otherwise the
-        local image path"""
-        if use_iiif.value and row.get("iiif_image"):
+        """IIIF url when enabled (or the local file is missing) and available
+        for this image, otherwise the local image path"""
+        if prefer_iiif(row["image_path"], row.get("iiif_image")):
             return iiif_url(row["iiif_image"], height=height)
         return row["image_path"]
 
-    return iiif_url, image_src, use_iiif
+    return iiif_url, image_src, prefer_iiif, use_iiif
 
 
 @app.function
@@ -751,9 +770,9 @@ def _(
     paths,
     placed,
     points,
+    prefer_iiif,
     sample_df,
     thumbnail_data_uri,
-    use_iiif,
 ):
     # initial size: fits within PLOT_MAX_WIDTH x
     # PLOT_HEIGHT, preserving canvas aspect; the plot then fills the available width
@@ -778,7 +797,7 @@ def _(
         remove_on_exit=True,
     ):
         try:
-            if use_iiif.value and _iiif:
+            if prefer_iiif(_p, _iiif):
                 # loaded by the browser; the plot crops to the cell
                 _thumbs.append(iiif_url(_iiif, width=THUMB_PX))
             else:
@@ -1292,7 +1311,7 @@ def _(
     nn_neighbors,
     nn_show_captions,
     nn_thumb_size,
-    use_iiif,
+    prefer_iiif,
 ):
     # results grid: one row per model config; images returned by more than
     # one model get a count badge (and are outlined together on hover)
@@ -1314,7 +1333,7 @@ def _(
                             "idx": _r["idx"],
                             "src": (
                                 iiif_url(_r["iiif_image"], height=_src_h)
-                                if use_iiif.value and _r["iiif_image"]
+                                if prefer_iiif(_r["image_path"], _r["iiif_image"])
                                 else image_data_uri(_r["image_path"], _src_h)
                             ),
                             "rank": _r["rank"],
@@ -1403,7 +1422,6 @@ def _(
     nn_show_captions,
     nn_tag_select,
     nn_thumb_size,
-    use_iiif,
 ):
     # filters and controls, then query image (with document metadata below)
     # and model picker next to the neighbors, in one output, so everything is visible in fullscreen
@@ -1486,7 +1504,6 @@ def _(
                     nn_k,
                     nn_thumb_size,
                     nn_show_captions,
-                    use_iiif,
                     _legend,
                 ],
                 justify="start",
