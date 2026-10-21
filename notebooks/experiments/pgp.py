@@ -512,8 +512,10 @@ def _(CANVAS_HEIGHT, CANVAS_WIDTH, coords, img_aspect, layout_mosaic, np):
     # UMAP coords (0-1) are stretched over the canvas, as assign_to_grid treats them
     scale = np.array([layout.canvas_width, layout.canvas_height], dtype=float)
     dest = np.full_like(coords, np.nan, dtype=float)
-    for (_r, _c), _i in layout.assignments.items():
-        dest[_i] = ((_c + 0.5) * cell_w, (_r + 0.5) * cell_h)
+    _rc = np.array(list(layout.assignments), dtype=float).reshape(-1, 2)
+    _ii = np.fromiter(layout.assignments.values(), dtype=int)
+    # (row, col) -> cell center (x, y)
+    dest[_ii] = (_rc[:, ::-1] + 0.5) * (cell_w, cell_h)
     placed = ~np.isnan(dest[:, 0])
 
     # mean distance moved, in units of cell diagonals
@@ -537,9 +539,9 @@ def _(coords, dest, np, placed, sample_df, scale):
     # one record per placed image: start (sx, sy), end (dx, dy), color, label, id;
     # thumbnails ("img") are added by the plot cell
     _idx = np.flatnonzero(placed)
-    _src = coords[_idx] * scale
-    _dst = dest[_idx]
     _c = coords[_idx]
+    _src = _c * scale
+    _dst = dest[_idx]
     _meta = sample_df.select("shelfmark", "pgpids", "doc_type", "iiif_image").to_dicts()
 
     points = [
@@ -549,11 +551,7 @@ def _(coords, dest, np, placed, sample_df, scale):
             "dx": float(_dst[k, 0]),
             "dy": float(_dst[k, 1]),
             # 2D color by original UMAP position
-            "color": "rgb({},{},{})".format(
-                int(255 * _c[k, 0]),
-                int(255 * (0.35 + 0.3 * (1 - _c[k, 0]) * _c[k, 1])),
-                int(255 * _c[k, 1]),
-            ),
+            "color": umap_color(*_c[k]),
             "label": image_label(_meta[i]),
             # row in sample_df, sent back when the point is clicked
             "id": int(i),
@@ -1005,6 +1003,12 @@ def _(IIIFImageClient, Path, data_dir, has_iiif, mo):
 
 
 @app.function
+def umap_color(x, y):
+    """2D color for a UMAP position (0-1 in each dimension)"""
+    return f"rgb({int(255 * x)},{int(255 * (0.35 + 0.3 * (1 - x) * y))},{int(255 * y)})"
+
+
+@app.function
 def image_label(meta):
     """hover text for an image: whatever document metadata is available"""
     _lines = []
@@ -1381,17 +1385,15 @@ def _(Path, urllib):
 
     # data location from environment variables; see "Data" section above
     # PGP document metadata is always loaded from the pgp-metadata repo
+    # optional dataset / metadata filenames within the data dir
+    dataset_name = os.environ.get("PGP_DATASET", "pgp.h5")
+    image_meta_name = os.environ.get("PGP_IMAGE_META", "image_meta.csv")
     if os.environ.get("PGP_DATA_DIR"):
         data_dir = Path(os.environ["PGP_DATA_DIR"]).expanduser()
-        # optional dataset / metadata filenames within the data dir
-        dataset_name = os.environ.get("PGP_DATASET", "pgp.h5")
-        image_meta_name = os.environ.get("PGP_IMAGE_META", "image_meta.csv")
     elif os.environ.get("PGP_DATA_URL"):
         _url = os.environ["PGP_DATA_URL"]
         data_dir = Path.home() / ".cache" / "iconoscope" / "pgp-subset"
-        dataset_name = "pgp.h5"
-        image_meta_name = "image_meta.csv"
-        if not (data_dir / "pgp.h5").exists():
+        if not (data_dir / dataset_name).exists():
             data_dir.mkdir(parents=True, exist_ok=True)
             _tar_path = data_dir / "download.tar"
             if Path(_url).expanduser().exists():
@@ -1435,24 +1437,9 @@ def _(ImageDataset, data_dir, dataset_name):
 def _(image_meta_path, pl):
     # load image metadata (csv or parquet)
     if image_meta_path.suffix == ".parquet":
-        # v2 metadata: clean columns, including IIIF image urls
         image_meta_df = pl.read_parquet(image_meta_path)
     else:
-        # TODO: this csv changes structure part way through and is not all of the files
         image_meta_df = pl.read_csv(image_meta_path)
-        # fix swapped image_path / shelfmark columns
-        image_meta_df = (
-            image_meta_df.with_columns(
-                real_path=pl.when(pl.col.image_path.str.starts_with("data/pgp-"))
-                .then(pl.col.image_path)
-                .otherwise(pl.col.shelfmark),
-                real_shelfmark=pl.when(pl.col.image_path.str.starts_with("data/pgp-"))
-                .then(pl.col.shelfmark)
-                .otherwise(pl.col.image_path),
-            )
-            .drop("image_path", "shelfmark")
-            .rename({"real_path": "image_path", "real_shelfmark": "shelfmark"})
-        )
     # IIIF image service url, when available (null otherwise)
     if "iiif_image" not in image_meta_df.columns:
         image_meta_df = image_meta_df.with_columns(iiif_image=pl.lit(None, pl.String))
