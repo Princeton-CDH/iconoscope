@@ -92,8 +92,7 @@ def _(mo):
 @app.cell
 def _(
     controls_ui,
-    document_links_md,
-    image_src,
+    details_panel,
     mo,
     mosaic_download,
     nn_image_df,
@@ -107,33 +106,22 @@ def _(
 ):
     # details + external links for the image clicked in the UMAP plot
     _sel = umap_grid_widget.value["selected"]
-    if _sel < 0:
-        umap_panel = mo.md("*Click an image for details and links.*").style(
-            {"font-size": "0.85em", "opacity": "0.7"}
-        )
-    else:
-        _row = sample_df.row(_sel, named=True)
+    _row = sample_df.row(_sel, named=True) if _sel >= 0 else None
+    _extra = []
+    if _row is not None:
         # same image in the similarity search, to start a search from it
         _nn_idx = nn_image_df.filter(pl.col.image_path == _row["image_path"])["idx"]
-        _search = mo.ui.button(
-            label="Find similar images",
-            disabled=_nn_idx.is_empty(),
-            on_click=lambda _: nn_set_start((int(_nn_idx[0]), nn_start_token)),
-        )
-        umap_panel = mo.vstack(
-            [
-                mo.image(
-                    image_src(_row, 600),
-                    style={"max-height": "300px", "max-width": "100%", "width": "auto"},
-                ),
-                mo.md(document_links_md(_row)).style({"font-size": "0.85em"}),
-                _search,
-                mo.md(
-                    "<small>sets the starting image in Similarity search, below</small>"
-                ).style({"opacity": "0.7"}),
-            ],
-            align="start",
-        )
+        _extra = [
+            mo.ui.button(
+                label="Find similar images",
+                disabled=_nn_idx.is_empty(),
+                on_click=lambda _: nn_set_start((int(_nn_idx[0]), nn_start_token)),
+            ),
+            mo.md(
+                "<small>sets the starting image in Similarity search, below</small>"
+            ).style({"opacity": "0.7"}),
+        ]
+    umap_panel = details_panel(_row, "Click an image for details and links.", _extra)
     # controls, plot, and panel in one output, so all are visible in fullscreen
     mo.vstack(
         [
@@ -313,7 +301,7 @@ def _(
 
 
 @app.cell
-def _(image_info_df, img_dataset, mo, pl):
+def _(img_dataset, make_filter_widgets, mo):
     _configs = img_dataset.configs_by_label()
     embedding_select = mo.ui.dropdown(
         options=_configs, value=list(_configs.keys())[0], label="Embedding"
@@ -325,42 +313,7 @@ def _(image_info_df, img_dataset, mo, pl):
     resample_button = mo.ui.button(
         label="New sample", value=0, on_click=lambda v: v + 1
     )
-    # optional document type filter; images whose shelfmark is associated with
-    # several documents match if any of them has the selected type
-    # options only include types present in the image data, labeled with image counts
-    _doc_type_counts = (
-        image_info_df.select(pl.col.doc_types.explode().alias("doc_type"))
-        .drop_nulls()
-        .group_by("doc_type")
-        .len()
-        .sort("doc_type")
-    )
-    # options shared with the similarity search filters
-    doc_type_options = {f"{_t} ({_n:,})": _t for _t, _n in _doc_type_counts.iter_rows()}
-    doc_type_select = mo.ui.dropdown(
-        options=doc_type_options,
-        value=None,
-        allow_select_none=True,
-        label="Document type",
-    )
-    # optional keyword filter on PGP tags (searchable); images match if any of
-    # their documents has any of the selected tags
-    _tag_counts = (
-        image_info_df.select(pl.col.tags.explode().alias("tag"))
-        .drop_nulls()
-        .group_by("tag")
-        .len()
-        .sort("tag")
-    )
-    tag_options = {f"{_t} ({_n:,})": _t for _t, _n in _tag_counts.iter_rows()}
-    tag_select = mo.ui.multiselect(
-        options=tag_options,
-        label="Keywords",
-    )
-    # case-insensitive text search on PGP document descriptions
-    description_search = mo.ui.text(
-        label="Description", placeholder="search descriptions"
-    )
+    doc_type_select, tag_select, description_search = make_filter_widgets()
     # displayed above the plot, in the same cell so they're visible in fullscreen
     controls_ui = mo.vstack(
         [
@@ -373,14 +326,48 @@ def _(image_info_df, img_dataset, mo, pl):
     return (
         controls_ui,
         description_search,
-        doc_type_options,
         doc_type_select,
         embedding_select,
         n_sample,
         resample_button,
-        tag_options,
         tag_select,
     )
+
+
+@app.cell
+def _(image_info_df, mo, pl):
+    def _count_options(col):
+        """dropdown options for values of a list column present in the image
+        data, labeled with image counts"""
+        _counts = (
+            image_info_df.select(pl.col(col).explode())
+            .drop_nulls()
+            .group_by(col)
+            .len()
+            .sort(col)
+        )
+        return {f"{_v} ({_n:,})": _v for _v, _n in _counts.iter_rows()}
+
+    _doc_type_options = _count_options("doc_types")
+    _tag_options = _count_options("tags")
+
+    def make_filter_widgets():
+        """document type, keyword, and description filters (shared by the UMAP
+        plot and similarity search). Images whose shelfmark is associated with
+        several documents match if any of them has the selected type / any of
+        the selected tags; description search is case-insensitive."""
+        return (
+            mo.ui.dropdown(
+                options=_doc_type_options,
+                value=None,
+                allow_select_none=True,
+                label="Document type",
+            ),
+            mo.ui.multiselect(options=_tag_options, label="Keywords"),
+            mo.ui.text(label="Description", placeholder="search descriptions"),
+        )
+
+    return (make_filter_widgets,)
 
 
 @app.cell
@@ -392,20 +379,8 @@ def _(embedding_select, img_dataset, mo):
 
 
 @app.cell
-def _(image_info_df, mo, pl, umap_df):
-    # attach metadata to dataset images; dataset paths are absolute, metadata
-    # paths are relative to the experiment dir (data/pgp-images/...)
-    umap_meta_df = (
-        umap_df.with_columns(
-            _rel_path=pl.col.image_path.str.extract(r"(data/pgp-images/.*)$")
-        )
-        .join(
-            image_info_df.rename({"image_path": "_rel_path"}),
-            on="_rel_path",
-            how="left",
-        )
-        .drop("_rel_path")
-    )
+def _(attach_image_info, mo, umap_df):
+    umap_meta_df = attach_image_info(umap_df)
     mo.md(
         f"Metadata found for **{umap_meta_df['shelfmark'].is_not_null().sum()}** of {umap_meta_df.height} images; "
         f"PGP document match for **{umap_meta_df['pgpids'].is_not_null().sum()}**"
@@ -436,7 +411,6 @@ def _(
     resample_button.value
     sample_df = filtered_df.sample(min(n_sample.value, filtered_df.height))
     coords = sample_df["umap"].to_numpy().astype(np.float32)
-    paths = sample_df["image_path"].to_list()
     # same rule as generate_mosaic: most common aspect ratio in the data
     img_aspect = float(sample_df["aspect_ratio"].mode()[0])
     _filters = (
@@ -450,7 +424,7 @@ def _(
     )
     # shown with the controls above the plot
     sample_summary = f"**{len(coords)}** of {filtered_df.height} images{f' ({", ".join(_filters)})' if _filters else ''}, image aspect ratio {img_aspect:.2f}"
-    return coords, filtered_df, img_aspect, paths, sample_df, sample_summary
+    return coords, filtered_df, img_aspect, sample_df, sample_summary
 
 
 @app.cell
@@ -596,18 +570,15 @@ def _(
     cell_w,
     grid_cols,
     grid_rows,
-    iiif_url,
     img_aspect,
     layout,
     mean_dist,
     mo,
-    np,
-    paths,
+    pl,
     placed,
     points,
-    prefer_iiif,
     sample_df,
-    thumbnail_data_uri,
+    widget_src,
 ):
     # initial size: fits within PLOT_MAX_WIDTH x
     # PLOT_HEIGHT, preserving canvas aspect; the plot then fills the available width
@@ -619,24 +590,19 @@ def _(
     _plot_h = round(layout.canvas_height * _k) + PLOT_CHROME
 
     # thumbnails, with a progress bar that's removed when done (the plot is
-    # displayed with the details panel, in the next cell); thumbnail_data_uri
+    # displayed with the details panel, in the next cell); image_data_uri
     # caches, so repeats are fast
-    _placed_paths = [paths[_i] for _i in np.flatnonzero(placed)]
-    _size = (THUMB_PX, max(1, round(THUMB_PX / img_aspect)))
+    _thumb_h = max(1, round(THUMB_PX / img_aspect))
     _thumbs = []
     _errors = []
-    _placed_iiif = sample_df["iiif_image"].gather(np.flatnonzero(placed)).to_list()
     for _p, _iiif in mo.status.progress_bar(
-        list(zip(_placed_paths, _placed_iiif)),
+        sample_df.filter(pl.Series(placed)).select("image_path", "iiif_image").rows(),
         title="Loading thumbnails",
         remove_on_exit=True,
     ):
         try:
-            if prefer_iiif(_p, _iiif):
-                # loaded by the browser; the plot crops to the cell
-                _thumbs.append(iiif_url(_iiif, width=THUMB_PX))
-            else:
-                _thumbs.append(thumbnail_data_uri(_p, _size))
+            # the plot crops to the cell
+            _thumbs.append(widget_src(_p, _iiif, THUMB_PX, _thumb_h))
         except Exception as _exc:
             _thumbs.append(None)
             _errors.append(f"{_p}: {_exc}")
@@ -673,7 +639,7 @@ def _(
 
 
 @app.cell
-def _(doc_type_options, img_dataset, mo, tag_options):
+def _(img_dataset, make_filter_widgets, mo):
     # all model + preprocessing configs with stored features, keyed by label
     nn_models = img_dataset.configs_by_label()
     nn_random_button = mo.ui.button(
@@ -685,16 +651,7 @@ def _(doc_type_options, img_dataset, mo, tag_options):
     )
     nn_show_captions = mo.ui.checkbox(value=True, label="Show rank · similarity")
     # filters for choosing the query image (same as the umap filters, plus shelfmark)
-    nn_doc_type_select = mo.ui.dropdown(
-        options=doc_type_options,
-        value=None,
-        allow_select_none=True,
-        label="Document type",
-    )
-    nn_tag_select = mo.ui.multiselect(options=tag_options, label="Keywords")
-    nn_description_search = mo.ui.text(
-        label="Description", placeholder="search descriptions"
-    )
+    nn_doc_type_select, nn_tag_select, nn_description_search = make_filter_widgets()
     nn_shelfmark_search = mo.ui.text(label="Shelfmark", placeholder="e.g. T-S Ar.52")
     return (
         nn_description_search,
@@ -739,22 +696,13 @@ def _(ModelPicker, img_dataset, mo, nn_models):
 
 
 @app.cell
-def _(image_info_df, img_dataset, mo, nn_models, np, pl):
+def _(attach_image_info, img_dataset, mo, nn_models, np):
     # load paths once, then L2-normalized features for each model, so
     # dot product == cosine similarity
     # with document metadata (as for umap_meta_df) for hover labels
-    nn_image_df = (
-        img_dataset.get_image_data()
-        .with_row_index("idx")
-        .with_columns(_rel_path=pl.col.image_path.str.extract(r"(data/pgp-images/.*)$"))
-        .join(
-            image_info_df.rename({"image_path": "_rel_path"}),
-            on="_rel_path",
-            how="left",
-        )
-        .drop("_rel_path")
-        .sort("idx")
-    )
+    nn_image_df = attach_image_info(
+        img_dataset.get_image_data().with_row_index("idx")
+    ).sort("idx")
     nn_features = {}
     with mo.status.progress_bar(
         total=len(nn_models), title="Loading embeddings", remove_on_exit=True
@@ -857,14 +805,12 @@ def _(nn_features, nn_image_df, nn_k, nn_model_picker, nn_query_idx, np, pl):
 @app.cell
 def _(
     NeighborGrid,
-    iiif_url,
-    image_data_uri,
     mo,
     nn_models,
     nn_neighbors,
     nn_show_captions,
     nn_thumb_size,
-    prefer_iiif,
+    widget_src,
 ):
     # results grid: one row per model config; images returned by more than
     # one model get a count badge (and are outlined together on hover)
@@ -884,10 +830,8 @@ def _(
                     "thumbs": [
                         {
                             "idx": _r["idx"],
-                            "src": (
-                                iiif_url(_r["iiif_image"], height=_src_h)
-                                if prefer_iiif(_r["image_path"], _r["iiif_image"])
-                                else image_data_uri(_r["image_path"], _src_h)
+                            "src": widget_src(
+                                _r["image_path"], _r["iiif_image"], height=_src_h
                             ),
                             "rank": _r["rank"],
                             "similarity": float(_r["similarity"]),
@@ -908,8 +852,7 @@ def _(
 
 @app.cell
 def _(
-    document_links_md,
-    image_src,
+    details_panel,
     mo,
     nn_grid,
     nn_image_df,
@@ -920,65 +863,44 @@ def _(
 ):
     # details + external links for the image clicked in the results grid
     _sel = nn_grid.value["selected"]
-    if _sel < 0:
-        nn_panel = mo.md("*Click a thumbnail for details and links.*").style(
-            {"font-size": "0.85em", "opacity": "0.7"}
-        )
-    else:
-        _row = nn_image_df.row(_sel, named=True)
+    _extra = []
+    if _sel >= 0:
         # rank of this image for each shown model
         _ranks = [
             f"{_name} #{_df.filter(pl.col.idx == _sel)['rank'][0]}"
             for _name, _df in nn_neighbors.items()
             if _sel in _df["idx"]
         ]
-        _use = mo.ui.button(
-            label="Use as starting image",
-            on_click=lambda _: nn_set_start((_sel, nn_start_token)),
-        )
-        nn_panel = mo.vstack(
-            [
-                mo.image(
-                    image_src(_row, 600),
-                    style={"max-height": "300px", "max-width": "100%", "width": "auto"},
-                ),
-                mo.md(
-                    document_links_md(_row)
-                    + "\n\n"
-                    + f"<small>Ranked by: {', '.join(_ranks)}</small>"
-                ).style({"font-size": "0.85em"}),
-                _use,
-            ],
-            align="start",
-        )
+        _extra = [
+            mo.md(f"<small>Ranked by: {', '.join(_ranks)}</small>"),
+            mo.ui.button(
+                label="Use as starting image",
+                on_click=lambda _: nn_set_start((_sel, nn_start_token)),
+            ),
+        ]
+    nn_panel = details_panel(
+        nn_image_df.row(_sel, named=True) if _sel >= 0 else None,
+        "Click a thumbnail for details and links.",
+        _extra,
+    )
     return (nn_panel,)
 
 
 @app.cell
 def _(Image, ImageOps, base64, functools, io):
-    # cached per (path, size) so resampling or changing the canvas doesn't
-    # reload images; defined in its own cell so the cache survives reruns
+    # JPEG data URIs for images shown inside widgets (which can't use marimo's
+    # file URLs); cached so resampling or changing the canvas doesn't reload
+    # images; defined in its own cell so the cache survives reruns
     @functools.cache
-    def thumbnail_data_uri(path, size):
-        """JPEG data URI of the full image scaled to *cover* ``size`` (no cropping)."""
-        with Image.open(path) as img:
-            _im = ImageOps.cover(img.convert("RGB"), size, Image.LANCZOS)
-        _buf = io.BytesIO()
-        _im.save(_buf, format="JPEG", quality=85)
-        return "data:image/jpeg;base64," + base64.b64encode(_buf.getvalue()).decode()
-
-    return (thumbnail_data_uri,)
-
-
-@app.cell
-def _(Image, base64, functools, io):
-    # cached per (path, height): aspect-preserving JPEG data URI, for images
-    # shown inside widgets (which can't use marimo's file URLs)
-    @functools.cache
-    def image_data_uri(path, height):
+    def image_data_uri(path, width=None, height=None):
+        """with width and height, scale the full image to *cover* that size
+        (no cropping); with only one, scale to it, preserving aspect ratio"""
         with Image.open(path) as img:
             _im = img.convert("RGB")
-            _im.thumbnail((height * 4, height), Image.LANCZOS)
+        if width and height:
+            _im = ImageOps.cover(_im, (width, height), Image.LANCZOS)
+        else:
+            _im.thumbnail((width or height * 4, height or width * 4), Image.LANCZOS)
         _buf = io.BytesIO()
         _im.save(_buf, format="JPEG", quality=85)
         return "data:image/jpeg;base64," + base64.b64encode(_buf.getvalue()).decode()
@@ -987,7 +909,42 @@ def _(Image, base64, functools, io):
 
 
 @app.cell
-def _(pl):
+def _(document_links_md, iiif_url, image_data_uri, image_src, mo, prefer_iiif):
+    def widget_src(path, iiif, width=None, height=None):
+        """image source for a widget: IIIF url when preferred, otherwise a
+        data URI of the local file (see image_data_uri for sizing)"""
+        if prefer_iiif(path, iiif):
+            # loaded by the browser, which crops/scales as needed; scale by
+            # width when given (keeps the aspect ratio)
+            if width:
+                return iiif_url(iiif, width=width)
+            return iiif_url(iiif, height=height)
+        return image_data_uri(path, width, height)
+
+    def details_panel(row, empty_msg, extra=()):
+        """details + external links for a clicked image (``row``, or None for
+        the empty message), followed by any ``extra`` elements"""
+        if row is None:
+            return mo.md(f"*{empty_msg}*").style(
+                {"font-size": "0.85em", "opacity": "0.7"}
+            )
+        return mo.vstack(
+            [
+                mo.image(
+                    image_src(row, 600),
+                    style={"max-height": "300px", "max-width": "100%", "width": "auto"},
+                ),
+                mo.md(document_links_md(row)).style({"font-size": "0.85em"}),
+                *extra,
+            ],
+            align="start",
+        )
+
+    return details_panel, widget_src
+
+
+@app.cell
+def _(pl, re):
     def filter_images(df, doc_type=None, tags=(), description="", shelfmark=""):
         """Filter images by document type, any of the given PGP tags, and
         case-insensitive substring search on description and shelfmark"""
@@ -995,18 +952,14 @@ def _(pl):
             df = df.filter(pl.col.doc_types.list.contains(doc_type))
         if tags:
             df = df.filter(pl.col.tags.list.set_intersection(list(tags)).list.len() > 0)
-        if description.strip():
-            df = df.filter(
-                pl.col.description.str.to_lowercase().str.contains(
-                    description.strip().lower(), literal=True
+        for _col, _query in {
+            "description": description,
+            "shelfmark": shelfmark,
+        }.items():
+            if _query.strip():
+                df = df.filter(
+                    pl.col(_col).str.contains(f"(?i){re.escape(_query.strip())}")
                 )
-            )
-        if shelfmark.strip():
-            df = df.filter(
-                pl.col.shelfmark.str.to_lowercase().str.contains(
-                    shelfmark.strip().lower(), literal=True
-                )
-            )
         return df
 
     return (filter_images,)
@@ -1540,7 +1493,23 @@ def _(image_meta_df, pgp_meta_df, pl):
         .with_columns(doc_type=pl.col.doc_types.list.join(", "))
     )
     image_info_df = _img.join(_docs, on="shelfmark", how="left")
-    return (image_info_df,)
+
+    def attach_image_info(df):
+        """join image metadata to dataset images; dataset paths are absolute,
+        metadata paths are relative to the experiment dir (data/pgp-images/...)"""
+        return (
+            df.with_columns(
+                _rel_path=pl.col.image_path.str.extract(r"(data/pgp-images/.*)$")
+            )
+            .join(
+                image_info_df.rename({"image_path": "_rel_path"}),
+                on="_rel_path",
+                how="left",
+            )
+            .drop("_rel_path")
+        )
+
+    return attach_image_info, image_info_df
 
 
 if __name__ == "__main__":
