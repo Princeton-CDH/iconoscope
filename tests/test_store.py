@@ -120,7 +120,7 @@ def test_write_and_read_features(store: DatasetStore):
     assert store.configs() == [CONFIG]
     assert store.features(CONFIG).tolist() == FEATURES.tolist()
     assert store.umap(CONFIG) is None
-    assert store.clusters(CONFIG) is None
+    assert store.clusters(CONFIG) == {}
 
 
 def test_write_features_validation(store: DatasetStore):
@@ -140,7 +140,7 @@ def test_write_features_overwrite_removes_derived(store: DatasetStore):
     store.write_features(CONFIG, FEATURES * 2, overwrite=True)
     assert store.features(CONFIG).tolist() == (FEATURES * 2).tolist()
     assert store.umap(CONFIG) is None
-    assert store.clusters(CONFIG) is None
+    assert store.clusters(CONFIG) == {}
 
 
 def test_write_umap_and_clusters(store: DatasetStore):
@@ -151,13 +151,34 @@ def test_write_umap_and_clusters(store: DatasetStore):
     store.write_features(CONFIG, FEATURES)
     store.write_umap(CONFIG, np.array([[0.1, 0.2], [0.3, 0.4]]))
     store.write_clusters(CONFIG, np.array([0, 1]), 2)
+    # results for different k are stored separately
+    store.write_clusters(CONFIG, np.array([0, 0]), 1)
     # replacing existing results is allowed
-    store.write_clusters(CONFIG, np.array([1, 1]), 1)
+    store.write_clusters(CONFIG, np.array([1, 1]), 2)
     assert store.umap(CONFIG).tolist() == [[0.1, 0.2], [0.3, 0.4]]
-    assert store.clusters(CONFIG).tolist() == [1, 1]
+    clusters = store.clusters(CONFIG)
+    assert {k: v.tolist() for k, v in clusters.items()} == {
+        ("kmeans", 1): [0, 0],
+        ("kmeans", 2): [1, 1],
+    }
+    assert list(store.clusters(CONFIG, n_clusters=1)) == [("kmeans", 1)]
+    assert store.cluster_info(CONFIG) == [
+        {"method": "kmeans", "n_clusters": 1, "size": 2},
+        {"method": "kmeans", "n_clusters": 2, "size": 2},
+    ]
+    assert store.clusters(CONFIG, n_clusters=5) == {}
     with h5py.File(store.path, "r") as f:
-        cluster_ds = f[StorageSchema.model_group(CONFIG, absolute=True)]["cluster"]
-        assert cluster_ds.attrs["n_clusters"] == 1
+        grp = f[StorageSchema.model_group(CONFIG, absolute=True)]["clusters"]
+        assert grp["kmeans_2"].attrs["n_clusters"] == 2
+        assert grp["kmeans_2"].attrs["method"] == "kmeans"
+
+
+def test_write_clusters_validation(store: DatasetStore):
+    store.write_features(CONFIG, FEATURES)
+    with pytest.raises(ValueError, match="Unsupported cluster method"):
+        store.write_clusters(CONFIG, np.array([0, 1]), 2, method="dbscan")
+    with pytest.raises(ValueError, match="dataset has 2 images"):
+        store.write_clusters(CONFIG, np.array([0]), 2)
 
 
 def test_prune_images(tmp_path: Path, store: DatasetStore):

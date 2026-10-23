@@ -38,10 +38,10 @@ def main(args: argparse.Namespace) -> None:
             info_details.append(
                 f"\tumap coordinates ({_dimensions(model_details['umap'])})"
             )
-        if "cluster" in model_details:
-            cluster = model_details["cluster"]
+        for cluster in model_details.get("clusters", []):
             info_details.append(
-                f"\t{cluster['size']:,} cluster labels (k={cluster['k']})"
+                f"\t{cluster['size']:,} cluster labels "
+                f"({cluster['method']}, k={cluster['n_clusters']})"
             )
 
     print("\n".join(info_details))

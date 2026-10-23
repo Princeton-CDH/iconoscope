@@ -209,8 +209,8 @@ def _(ModelPicker, info, mo, models):
         _meta = [f"{config.model.dimensions}d"]
         if "umap" in _data:
             _meta.append("umap")
-        if "cluster" in _data:
-            _meta.append(f"k={_data['cluster']['k']}")
+        for _cluster in _data.get("clusters", []):
+            _meta.append(f"k={_cluster['n_clusters']}")
         return {
             "model": config.model.name,
             # one badge per set option (key can't be split on "_": center_crop)

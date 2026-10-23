@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import ClassVar, Self
 
 import h5py
+import numpy as np
 import polars as pl
 
 from iconoscope.models import AVAILABLE_MODELS, EmbeddingConfig
@@ -36,7 +37,7 @@ class StorageSchema:
     # relative to model group
     features_ds: str = "features"
     umap_ds: str = "umap"
-    cluster_ds: str = "cluster"
+    clusters_group: str = "clusters"
 
     # schema attrs (file root)
     attr_schema = "schema"
@@ -47,7 +48,11 @@ class StorageSchema:
     attr_model = "model"
     attr_model_id = "model_id"
     # cluster dataset attrs
+    attr_cluster_method = "method"
     attr_n_clusters = "n_clusters"
+
+    #: supported clustering methods
+    cluster_methods: tuple[str, ...] = ("kmeans",)
 
     @classmethod
     def all_models_path(cls) -> str:
@@ -60,6 +65,17 @@ class StorageSchema:
         configuration; relative to the all-models group unless `absolute`."""
         base_path = f"{cls.all_models_path()}/" if absolute else ""
         return f"{base_path}{config.model.name}/{config.key}"
+
+    @classmethod
+    def cluster_name(cls, method: str, n_clusters: int) -> str:
+        """Dataset name (within the clusters group) for cluster labels
+        generated with a method and options, e.g. ``kmeans_5``."""
+        if method not in cls.cluster_methods:
+            raise ValueError(
+                f"Unsupported cluster method `{method}`; "
+                f"supported: {', '.join(cls.cluster_methods)}"
+            )
+        return f"{method}_{n_clusters}"
 
 
 #: compression used for all datasets
@@ -278,13 +294,54 @@ class DatasetStore:
             except KeyError:
                 return None
 
-    def clusters(self, config: EmbeddingConfig):
-        """Stored cluster labels for a configuration, or None."""
+    def _clusters_group(self, config: EmbeddingConfig) -> h5py.Group | None:
+        """Clusters group for a config, or None; file must be open."""
+        return self.file.get(
+            f"{self.schema.model_group(config, absolute=True)}/{self.schema.clusters_group}"
+        )
+
+    @classmethod
+    def _cluster_key(cls, ds: h5py.Dataset) -> tuple[str, int]:
+        """Clustering method and number of clusters for a stored result."""
+        return (
+            _to_python(ds.attrs[cls.schema.attr_cluster_method]),
+            _to_python(ds.attrs[cls.schema.attr_n_clusters]),
+        )
+
+    def cluster_info(self, config: EmbeddingConfig) -> list[dict]:
+        """Stored cluster results for a configuration: a list of dicts with
+        ``method``, ``n_clusters``, and ``size`` (number of labels), sorted
+        by method and number of clusters."""
         with self.open():
-            try:
-                return self._model_dataset(config, self.schema.cluster_ds)[:]
-            except KeyError:
-                return None
+            grp = self._clusters_group(config)
+            if grp is None:
+                return []
+            info = []
+            for ds in grp.values():
+                method, n_clusters = self._cluster_key(ds)
+                info.append(
+                    {"method": method, "n_clusters": n_clusters, "size": ds.size}
+                )
+        return sorted(info, key=lambda c: (c["method"], c["n_clusters"]))
+
+    def clusters(
+        self,
+        config: EmbeddingConfig,
+        method: str = "kmeans",
+        n_clusters: int | None = None,
+    ) -> dict[tuple[str, int], np.ndarray]:
+        """Stored cluster labels for a configuration, keyed by
+        ``(method, n_clusters)`` and sorted. If `n_clusters` is specified,
+        only returns results for that method and number of clusters (empty
+        if not present); otherwise returns all stored results."""
+        with self.open():
+            grp = self._clusters_group(config)
+            if grp is None:
+                return {}
+            if n_clusters is not None:
+                name = self.schema.cluster_name(method, n_clusters)
+                return {(method, n_clusters): grp[name][:]} if name in grp else {}
+            return dict(sorted((self._cluster_key(ds), ds[:]) for ds in grp.values()))
 
     ## writes
 
@@ -358,10 +415,23 @@ class DatasetStore:
                 self._feature_group(config), self.schema.umap_ds, coords
             )
 
-    def write_clusters(self, config: EmbeddingConfig, labels, n_clusters: int) -> None:
-        """Store (or replace) cluster labels for a configuration."""
-        with self.open("r+"):
-            ds = self._write_dataset(
-                self._feature_group(config), self.schema.cluster_ds, labels
+    def write_clusters(
+        self,
+        config: EmbeddingConfig,
+        labels,
+        n_clusters: int,
+        method: str = "kmeans",
+    ) -> None:
+        """Store (or replace) cluster labels for a configuration, generated
+        with the specified method and number of clusters. Results for
+        different methods and numbers of clusters are stored separately."""
+        name = self.schema.cluster_name(method, n_clusters)
+        if len(labels) != self.image_count:
+            raise ValueError(
+                f"{len(labels)} cluster labels; dataset has {self.image_count} images"
             )
+        with self.open("r+"):
+            grp = self._feature_group(config).require_group(self.schema.clusters_group)
+            ds = self._write_dataset(grp, name, labels)
+            ds.attrs[self.schema.attr_cluster_method] = method
             ds.attrs[self.schema.attr_n_clusters] = n_clusters

@@ -44,4 +44,4 @@ def test_cluster_uses_embedding_config(mock_identify, dataset_with_features, cap
     # clustering + saving use the preprocessing-specific configuration
     assert mock_identify.call_args.args[1] == config
     df = dataset_with_features.load_data(config, features=True, clusters=True)
-    assert df["cluster"].to_list() == [0, 1, 1]
+    assert df["cluster_kmeans_2"].to_list() == [0, 1, 1]

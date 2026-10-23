@@ -69,7 +69,7 @@ def dedupe(h5_path: Path, dry_run: bool = False) -> None:
                 for opt_grp in model_grp.values():
                     if "features" in opt_grp:
                         subset(opt_grp, "features", keep_idx)
-                    for derived in ("umap", "cluster"):
+                    for derived in ("umap", "cluster", "clusters"):
                         if derived in opt_grp:
                             del opt_grp[derived]
                             print(f"  removed {opt_grp.name}/{derived} (regenerate)")

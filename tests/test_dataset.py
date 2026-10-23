@@ -182,8 +182,7 @@ def test_save_features_preserves_existing_data(tmp_path: Path, tmp_image_dir: Pa
         model_group.create_dataset(
             dataset.schema.umap_ds, data=[[0.1, 0.2], [0.3, 0.4]]
         )
-        cluster = model_group.create_dataset(dataset.schema.cluster_ds, data=[0, 1])
-        cluster.attrs["n_clusters"] = 2
+    dataset.save_clusters(np.array([0, 1]), 2, CONFIG)
 
     dataset.save_features(
         pl.DataFrame(
@@ -206,8 +205,9 @@ def test_save_features_preserves_existing_data(tmp_path: Path, tmp_image_dir: Pa
             [0.1, 0.2],
             [0.3, 0.4],
         ]
-        assert dinov2_model_grp[dataset.schema.cluster_ds][:].tolist() == [0, 1]
-        assert dinov2_model_grp[dataset.schema.cluster_ds].attrs["n_clusters"] == 2
+        cluster_ds = dinov2_model_grp[dataset.schema.clusters_group]["kmeans_2"]
+        assert cluster_ds[:].tolist() == [0, 1]
+        assert cluster_ds.attrs["n_clusters"] == 2
 
 
 def test_save_features_rejects_different_image_paths(
@@ -357,7 +357,7 @@ def test_save_features_overwrite(tmp_path: Path, tmp_image_dir: Path):
     saved = dataset.load_data(CONFIG, features=True)
     assert saved["features"].to_numpy().tolist() == [[5.0, 5.0], [6.0, 6.0]]
     assert (
-        "cluster"
+        "clusters"
         # currently reporting as named in h5, i.e. model/opts
         not in dataset.info()["models"][dataset.schema.model_group(CONFIG)]
     )
@@ -564,7 +564,7 @@ def test_overwrite_only_replaces_matching_config(tmp_image_dir: Path):
     # default config features and derived clusters are untouched
     df = dataset.load_data(CONFIG, features=True, clusters=True)
     assert df["features"].to_numpy().tolist() == [[2.0, 0.0], [0.0, 2.0]]
-    assert df["cluster"].to_list() == [0, 1]
+    assert df["cluster_kmeans_2"].to_list() == [0, 1]
 
 
 def test_save_clusters_preprocess_config(tmp_image_dir: Path):
@@ -576,12 +576,29 @@ def test_save_clusters_preprocess_config(tmp_image_dir: Path):
 
     # clusters stored with the matching config only
     gray_df = dataset.load_data(gray_config, features=True, clusters=True)
-    assert gray_df["cluster"].to_list() == [1, 0]
+    assert gray_df["cluster_kmeans_2"].to_list() == [1, 0]
     default_df = dataset.load_data(CONFIG, features=True, clusters=True)
-    assert "cluster" not in default_df.columns
+    assert "cluster_kmeans_2" not in default_df.columns
     info = dataset.info()["models"]
-    assert info["dinov2/grayscale"]["cluster"]["k"] == 2
-    assert "cluster" not in info["dinov2/defaults"]
+    assert info["dinov2/grayscale"]["clusters"] == [
+        {"method": "kmeans", "n_clusters": 2, "size": 2}
+    ]
+    assert "clusters" not in info["dinov2/defaults"]
+
+
+def test_load_data_clusters_by_k(tmp_image_dir: Path):
+    dataset, feature_df = _two_image_dataset(tmp_image_dir)
+    dataset.save_features(feature_df, CONFIG)
+    dataset.save_clusters(np.array([1, 0]), 2, CONFIG)
+    dataset.save_clusters(np.array([0, 0]), 1, CONFIG)
+
+    df = dataset.load_data(CONFIG, clusters=True)
+    assert {"cluster_kmeans_1", "cluster_kmeans_2"} <= set(df.columns)
+    df = dataset.load_data(CONFIG, clusters=2)
+    assert "cluster_kmeans_2" in df.columns
+    assert "cluster_kmeans_1" not in df.columns
+    with pytest.raises(ValueError, match="configuration is required"):
+        dataset.load_data(clusters=True)
 
 
 def test_save_features_stores_config_attrs(tmp_path: Path, tmp_image_dir: Path):
