@@ -231,6 +231,39 @@ def load_thumbnail(path: str | Path, size: tuple[int, int]) -> Image.Image:
         return ImageOps.fit(img.convert("RGB"), size, Image.LANCZOS)
 
 
+def render_mosaic(
+    paths: list[str | Path],
+    coords: np.ndarray,
+    aspect_ratio: float,
+    width: int = 2000,
+    height: int = 2000,
+) -> Image.Image:
+    """Lay out images on a grid based on 2D coordinates (normalized 0-1) and
+    return the mosaic image. ``paths`` and ``coords`` must be in the same order.
+    Images that can't be loaded are left blank, with a warning."""
+    layout = layout_mosaic(coords, width, height, aspect_ratio)
+    thumb_size = (layout.cell_width, layout.cell_height)
+
+    # create a blank canvas for the calculated size
+    # (due to rounding, actual canvas size may not be exactly as requested)
+    # using black bg instead of white, which would be color=(255, 255, 255)
+    canvas = Image.new(
+        "RGB", (layout.canvas_width, layout.canvas_height), color=(0, 0, 0)
+    )
+    for (row, col), img_idx in tqdm.tqdm(
+        layout.assignments.items(),
+        total=len(layout.assignments),
+        desc="Creating mosaic",
+    ):
+        try:
+            thumb = load_thumbnail(paths[img_idx], thumb_size)
+            # paste the thumbnail on the grid in the appropriate slot
+            canvas.paste(thumb, (col * layout.cell_width, row * layout.cell_height))
+        except Exception as exc:
+            warnings.warn(f"Could not load {paths[img_idx]}: {exc}")
+    return canvas
+
+
 def generate_mosaic(
     img_dataset: ImageDataset,
     config: EmbeddingConfig,
@@ -257,31 +290,15 @@ def generate_mosaic(
     if sample_size is not None:
         df = df.sample(sample_size)
 
-    paths = df["image_path"].to_list()
-
-    # determine ideal thumbnail size based on mosaic size and number of images
-    n_images = df.height
     # use the most frequent image aspect ratio in the dataset as thumbnail aspect ratio
     img_aspect_ratio = df["aspect_ratio"].mode()[0]
 
-    layout = layout_mosaic(df["umap"].to_numpy(), width, height, img_aspect_ratio)
-    thumb_size = (layout.cell_width, layout.cell_height)
-
-    # create a blank canvas for the calculated size
-    # (due to rounding, actual canvas size may not be exactly as requested)
-    canvas = Image.new(
-        "RGB", (layout.canvas_width, layout.canvas_height), color=(0, 0, 0)
+    canvas = render_mosaic(
+        df["image_path"].to_list(),
+        df["umap"].to_numpy(),
+        img_aspect_ratio,
+        width,
+        height,
     )
-    # using black bg instead of white, which would be color=(255, 255, 255)
-    for (row, col), img_idx in tqdm.tqdm(
-        layout.assignments.items(), total=n_images, desc="Creating mosaic"
-    ):
-        try:
-            thumb = load_thumbnail(paths[img_idx], thumb_size)
-            # paste the thumbnail on the grid in the appropriate slot
-            canvas.paste(thumb, (col * layout.cell_width, row * layout.cell_height))
-        except Exception as exc:
-            warnings.warn(f"Could not load {paths[img_idx]}: {exc}")
-
     canvas.save(output, quality=jpeg_quality)
     print(f"Saved mosaic to {output}")

@@ -127,3 +127,34 @@ def test_load_thumbnail(tmp_path) -> None:
     thumb = mosaic.load_thumbnail(path, (30, 40))
     assert thumb.size == (30, 40)
     assert thumb.mode == "RGB"
+
+
+def test_render_mosaic(tmp_path) -> None:
+    from PIL import Image
+
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)]
+    paths = []
+    for i, color in enumerate(colors):
+        path = tmp_path / f"img{i}.png"
+        Image.new("RGB", (40, 30), color).save(path)
+        paths.append(path)
+    # one image per corner
+    coords = np.array([[0, 0], [1, 0], [0, 1], [1, 1]], dtype=np.float32)
+    layout = mosaic.layout_mosaic(coords, 200, 100, 40 / 30)
+    canvas = mosaic.render_mosaic(paths, coords, 40 / 30, 200, 100)
+    assert canvas.size == (layout.canvas_width, layout.canvas_height)
+    # each image is pasted in its assigned cell
+    for (row, col), idx in layout.assignments.items():
+        center = (
+            int((col + 0.5) * layout.cell_width),
+            int((row + 0.5) * layout.cell_height),
+        )
+        assert canvas.getpixel(center) == colors[idx]
+
+
+def test_render_mosaic_missing_image(tmp_path) -> None:
+    coords = np.array([[0.5, 0.5]], dtype=np.float32)
+    with pytest.warns(UserWarning, match="Could not load"):
+        canvas = mosaic.render_mosaic([tmp_path / "missing.png"], coords, 1.0, 50, 50)
+    # left blank (black)
+    assert canvas.getpixel((10, 10)) == (0, 0, 0)

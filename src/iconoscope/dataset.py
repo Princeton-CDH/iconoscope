@@ -8,7 +8,13 @@ import h5py
 import numpy as np
 import polars as pl
 from PIL import Image
-from torch.utils.data import IterableDataset
+
+try:
+    from torch.utils.data import IterableDataset
+except ImportError:
+    # torch is only needed to generate embeddings; allow loading and
+    # exploring stored data without it (e.g. in notebooks)
+    IterableDataset = object
 
 from iconoscope.models import AVAILABLE_MODELS, EmbeddingConfig
 from iconoscope.umap import reduce_features
@@ -504,6 +510,17 @@ class ImageDataset(IterableDataset):
                     }
                     configs.append(EmbeddingConfig(model, **opts))
         return configs
+
+    def configs_by_label(self) -> dict[str, EmbeddingConfig]:
+        """Stored embedding configurations keyed by display label
+        (``model/key``), sorted by model name with default preprocessing first."""
+        return {
+            config.label: config
+            for config in sorted(
+                self.get_configs(),
+                key=lambda c: (c.model.name, c.key != "defaults", c.key),
+            )
+        }
 
     def get_image_data(self) -> pl.DataFrame:
         return self.load_data()  # images paths only by default

@@ -43,6 +43,7 @@ iconoscope = "iconoscope.cli:main"
 dev = [
     "altair>=6.3.0",
     "marimo>=0.25.1",
+    "piffle>=0.9.0",
     "pytest>=8.0",
     "pytest-cov>=7.1.0",
     "wigglystuff>=0.5.36",
@@ -54,4 +55,22 @@ build-backend = "uv_build"
 
 
 [tool.marimo.runtime]
+# Add project source directory to python path
 pythonpath = ["src"]
+
+# match ruff's default line length so marimo and the ruff pre-commit hook agree
+[tool.marimo.formatting]
+line_length = 88
+
+[tool.marimo.display]
+cell_output = "below"
+theme = "system"      # honor user preference, including in static html exports
+
+[tool.marimo.save]
+format_on_save = true
+
+[tool.marimo.diagnostics]
+enabled = true
+
+[tool.marimo.experimental]
+lsp = true
