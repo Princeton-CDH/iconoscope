@@ -9,7 +9,8 @@ import polars as pl
 import pytest
 from PIL import Image
 
-from iconoscope.dataset import ImageDataset, StorageSchema, find_images
+from iconoscope.dataset import ImageDataset, find_images
+from iconoscope.store import StorageSchema
 from iconoscope.models import DEFAULT_MODEL, EmbeddingConfig, EmbeddingModel
 
 CONFIG = EmbeddingConfig(DEFAULT_MODEL)

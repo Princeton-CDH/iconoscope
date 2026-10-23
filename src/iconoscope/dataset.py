@@ -16,15 +16,14 @@ except ImportError:
     # exploring stored data without it (e.g. in notebooks)
     IterableDataset = object
 
-from iconoscope.models import AVAILABLE_MODELS, EmbeddingConfig
+from iconoscope.models import EmbeddingConfig
+from iconoscope.store import DatasetStore, StorageSchema
 from iconoscope.umap import reduce_features
 
 logger = logging.getLogger(__name__)
 
 #: default image extensions
 DEFAULT_IMG_EXTENSIONS = {".jpg", ".png", ".jpeg", ".tiff", ".webp", ".avif"}
-
-# base class for iterable dataset without storage?
 
 
 def find_images(
@@ -69,51 +68,6 @@ def find_images(
             break
 
 
-class StorageSchema:
-    """
-    Group and dataset names for iconoscope image dataset within HDF5 file.
-    """
-
-    # schema versioning
-    schema_name: str = "iconoscope"
-    version: float = 0.2
-
-    image_group: str = "image"
-    # relative to image group
-    image_ds_paths: str = "paths"
-    image_ds_sizes: str = "sizes"
-    all_models_group: str = "models"
-    # relative to model group©
-    features_ds: str = "features"
-    umap_ds: str = "umap"
-    cluster_ds: str = "cluster"
-
-    # model group attrs
-    attr_model = "model"
-    attr_model_id = "model_id"
-
-    # schema attrs
-    attr_schema = "schema"
-    attr_schema_version = "schema_version"
-
-    @classmethod
-    def model_group(cls, config: EmbeddingConfig, absolute: bool = False) -> str:
-        """Group path for features and derived data for a model + preprocessing
-        configuration; relative to the all-models group unless `absolute`."""
-        base_path = f"{cls.image_group}/{cls.all_models_group}/" if absolute else ""
-        return f"{base_path}{config.model.name}/{config.key}"
-
-
-# IMAGE_GROUP = "image"
-# PATHS = "paths"
-# MODELS = "models"
-# FEATURES = "features"
-# UMAP = "umap"
-# CLUSTER = "cluster"
-# IMAGE_DIR_ATTR = "image_dir"
-# N_CLUSTERS_ATTR = "n_clusters"
-
-
 @dataclass
 class ImageDataset(IterableDataset):
     """
@@ -127,6 +81,9 @@ class ImageDataset(IterableDataset):
 
     #: schema for group and dataset names within the hdf5 storage
     schema: StorageSchema = field(default_factory=StorageSchema)
+
+    #: storage for this dataset, set from `storage_path` on init
+    store: DatasetStore = field(init=False, repr=False)
 
     @classmethod
     def create(
@@ -167,30 +124,13 @@ class ImageDataset(IterableDataset):
         if not valid_paths:
             raise ValueError(f"No valid images found in `{image_dir}`")
 
-        # glob order is indeterminate; load into a dataframe and sort by path before saving
+        # glob order is indeterminate; sort by path before saving
         df = pl.DataFrame(data={"paths": valid_paths, "sizes": image_sizes}).sort(
             "paths"
         )
-
-        # TODO: move somewhere reusable
-        schema = StorageSchema()
-        with h5py.File(storage_path, "w") as h5_file:
-            # store iconoscope schema & version in top-level metadata
-            h5_file.attrs[schema.attr_schema] = schema.schema_name
-            h5_file.attrs[schema.attr_schema_version] = schema.version
-            image_group = h5_file.create_group(schema.image_group)
-            # image paths are stored relative to the (absolute) image dir
-            image_group.attrs["image_dir"] = str(image_dir)
-            image_group.create_dataset(
-                schema.image_ds_paths,
-                data=df["paths"].to_list(),
-                compression="gzip",
-            )
-            image_group.create_dataset(
-                schema.image_ds_sizes,
-                data=df["sizes"].to_list(),
-                compression="gzip",
-            )
+        DatasetStore.create(
+            storage_path, image_dir, df["paths"].to_list(), df["sizes"].to_list()
+        )
 
         return cls(storage_path=storage_path)
 
@@ -201,6 +141,7 @@ class ImageDataset(IterableDataset):
                 f"Dataset `{self.storage_path}` does not exist; "
                 "use ImageDataset.create() to create a new dataset"
             )
+        self.store = DatasetStore(self.storage_path)
 
     def get_image_paths(self) -> Iterator[Path]:
         """Yield image paths from the stored dataset."""
@@ -442,33 +383,8 @@ class ImageDataset(IterableDataset):
 
     def get_configs(self) -> list[EmbeddingConfig]:
         """Embedding configurations (model + preprocessing options) with
-        features stored in this dataset, reconstructed from group attributes.
-        Groups without config attributes or for unavailable models are skipped."""
-        configs = []
-        with h5py.File(self.storage_path, "r") as f:
-            all_models_grp = f[self.schema.image_group].get(
-                self.schema.all_models_group
-            )
-            if all_models_grp is None:
-                return configs
-            for model_grp in all_models_grp.values():
-                for opt_grp in model_grp.values():
-                    if self.schema.features_ds not in opt_grp:
-                        continue
-                    model = AVAILABLE_MODELS.get(
-                        opt_grp.attrs.get(self.schema.attr_model)
-                    )
-                    if model is None:
-                        continue
-                    opts = {
-                        opt: opt_grp.attrs[opt].item()
-                        if hasattr(opt_grp.attrs[opt], "item")
-                        else opt_grp.attrs[opt]
-                        for opt in EmbeddingConfig.option_names()
-                        if opt in opt_grp.attrs
-                    }
-                    configs.append(EmbeddingConfig(model, **opts))
-        return configs
+        features stored in this dataset; see :meth:`DatasetStore.configs`."""
+        return self.store.configs()
 
     def configs_by_label(self) -> dict[str, EmbeddingConfig]:
         """Stored embedding configurations keyed by display label
