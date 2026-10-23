@@ -18,29 +18,33 @@ CLIP_CONFIG = EmbeddingConfig(EmbeddingModel("clip", "foobar/clip", 73))
 ## image dataset class
 
 
-def test_init_validation(tmp_path):
+def test_init_requires_existing_storage(tmp_path):
+    with pytest.raises(ValueError, match=r"does not exist.*create\(\)"):
+        ImageDataset(storage_path=tmp_path / "a.h5")
+
+    # storage path exists (currently not validated)
+    h5_datafile = tmp_path / "z.h5"
+    h5_datafile.touch()
+    assert ImageDataset(storage_path=h5_datafile)
+
+
+def test_create_validation(tmp_path):
     image_dir = tmp_path / "images"
     # non-existent
     with pytest.raises(ValueError, match="not a directory"):
-        ImageDataset(image_dir=image_dir, storage_path=tmp_path / "a.h5")
+        ImageDataset.create(image_dir, tmp_path / "a.h5")
     # file instead of dir
     img_file = tmp_path / "img.png"
     img_file.touch()
     with pytest.raises(ValueError, match="not a directory"):
-        ImageDataset(image_dir=img_file, storage_path=tmp_path / "a.h5")
-
-    # image dir is required when h5 file doesn't exist
-    with pytest.raises(ValueError, match="image_dir is required"):
-        ImageDataset(storage_path=tmp_path / "a.h5")
-
-    # existing directory - no error, returns new object
+        ImageDataset.create(img_file, tmp_path / "a.h5")
+    # no images
     image_dir.mkdir()
-    assert ImageDataset(image_dir=image_dir, storage_path=tmp_path / "a.h5")
-
-    # storage path exists - image dir is not required
-    h5_datafile = tmp_path / "z.h5"
-    h5_datafile.touch()  # currently doesn't validate (probably should in future)
-    assert ImageDataset(storage_path=h5_datafile)
+    with pytest.raises(ValueError, match="No valid images"):
+        ImageDataset.create(image_dir, tmp_path / "a.h5")
+    # storage already exists
+    with pytest.raises(ValueError, match="already exists"):
+        ImageDataset.create(image_dir, img_file)
 
 
 def test_create_writes_validated_image_inventory(tmp_path: Path, tmp_image_dir: Path):
@@ -91,38 +95,26 @@ def test_get_image_data(tmp_path: Path, tmp_image_dir: Path):
 
 
 def test_get_image_paths(tmp_path: Path, tmp_image_dir: Path):
-    # when storage file doesn't exist, yields results from find image method
-    h5_datafile = tmp_path / "data.h5"
-    img_ds = ImageDataset(image_dir=tmp_image_dir, storage_path=h5_datafile)
-    with patch.object(img_ds, "get_image_data") as mock_get_image_data:
-        img_paths = img_ds.get_image_paths()
-        # should not load from data when storage file doesn't exist
-        mock_get_image_data.assert_not_called()
-        assert isinstance(img_paths, Iterable)
-        img_paths = list(img_paths)
-        assert len(img_paths) == 3  # 3 in fixture
-        for path in img_paths:
-            assert isinstance(path, Path)
-            assert path.suffix == ".jpg"
+    img_ds = ImageDataset.create(tmp_image_dir, tmp_path / "data.h5")
+    img_paths = img_ds.get_image_paths()
+    assert isinstance(img_paths, Iterable)
+    img_paths = list(img_paths)
+    # paths come from storage, sorted, as absolute Path objects
+    assert img_paths == sorted(tmp_image_dir.glob("*.jpg"))
+    assert all(isinstance(p, Path) for p in img_paths)
 
-        h5_datafile.touch()
-        test_image_paths = ["foobar_a.jpg", "b.jpg"]
-        img_df = pl.DataFrame(data={"image_path": test_image_paths})
-        mock_get_image_data.return_value = img_df
-        img_paths = img_ds.get_image_paths()
-        # call count assertion fails, but mock data is working
-        # assert mock_get_image_data.call_count == 1
-        assert isinstance(img_paths, Iterable)
-        img_paths = list(img_paths)
-        assert len(img_paths) == len(test_image_paths)
-        for i, path in enumerate(img_paths):
-            assert isinstance(path, Path)
-            assert str(path) == test_image_paths[i]
+    test_image_paths = ["foobar_a.jpg", "b.jpg"]
+    with patch.object(
+        img_ds,
+        "get_image_data",
+        return_value=pl.DataFrame({"image_path": test_image_paths}),
+    ):
+        assert [str(p) for p in img_ds.get_image_paths()] == test_image_paths
 
 
 def test_iter(tmp_path: Path, tmp_image_dir: Path):
     h5_datafile = tmp_path / "data.h5"
-    img_ds = ImageDataset(image_dir=tmp_image_dir, storage_path=h5_datafile)
+    img_ds = ImageDataset.create(image_dir=tmp_image_dir, storage_path=h5_datafile)
     images = img_ds.__iter__()
     assert isinstance(images, Iterable)
     images = list(images)
@@ -169,8 +161,6 @@ def test_collate_single_item():
 
 def test_save_features_preserves_existing_data(tmp_path: Path, tmp_image_dir: Path):
     storage_path = tmp_path / "data.h5"
-    image_dir = tmp_path / "images"
-    image_dir.mkdir()
     dataset = ImageDataset.create(
         storage_path=storage_path, image_dir=tmp_image_dir, max_images=2
     )
@@ -523,14 +513,6 @@ def test_has_features_any_ignores_groups_without_features(tmp_image_dir: Path):
     with h5py.File(dataset.storage_path, "r+") as h5_file:
         h5_file.require_group(dataset.schema.model_group(CONFIG, absolute=True))
     assert not dataset.has_features()
-
-
-def test_has_features_missing_storage(tmp_path: Path, tmp_image_dir: Path):
-    dataset = ImageDataset(
-        storage_path=tmp_path / "missing.h5", image_dir=tmp_image_dir
-    )
-    assert not dataset.has_features()
-    assert not dataset.has_features(CONFIG)
 
 
 def test_has_features_preprocess_specific(tmp_image_dir: Path):

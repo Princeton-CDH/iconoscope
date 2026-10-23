@@ -121,18 +121,9 @@ class ImageDataset(IterableDataset):
     but also provides logic for saving and loading from HDF5 file.
     """
 
-    #: path to hdf5 storage for image dataset
+    #: path to existing hdf5 storage for image dataset; use :meth:`create`
+    #: to create a new dataset
     storage_path: Path
-
-    #: base directory for images in this dataset - OPTIONAL (saved as an attr in hf5 on creation)
-    image_dir: Path | None = None
-
-    #: image extensions; if not specified, uses the defaults
-    extensions: set[str] = field(default_factory=DEFAULT_IMG_EXTENSIONS.copy)
-
-    #: optional limit for number of images to find; which images are included
-    #: is arbitrary (filesystem order), see :func:`find_images`
-    max_images: int | None = None
 
     #: schema for group and dataset names within the hdf5 storage
     schema: StorageSchema = field(default_factory=StorageSchema)
@@ -204,28 +195,17 @@ class ImageDataset(IterableDataset):
         return cls(storage_path=storage_path)
 
     def __post_init__(self):
-        # when creating a new collection, storage will not exist so image dir is required
-        # TODO: require create with image dir, and only open existing storage in init method
+        self.storage_path = Path(self.storage_path)
         if not self.storage_path.exists():
-            if self.image_dir is None:
-                raise ValueError(
-                    f"image_dir is required when creating new image dataset ({self.storage_path} does not exist)"
-                )
-            elif not self.image_dir.is_dir():
-                raise ValueError(
-                    f"Image directory `{self.image_dir}` is not a directory"
-                )
-        # otherwise, storage exists and we will load paths from it
+            raise ValueError(
+                f"Dataset `{self.storage_path}` does not exist; "
+                "use ImageDataset.create() to create a new dataset"
+            )
 
     def get_image_paths(self) -> Iterator[Path]:
-        """Yield a list of image paths either from configured image directory or stored data file"""
-        # TODO: simplify when we update init to storage only
-        if self.storage_path.exists():
-            for row in self.get_image_data().iter_rows(named=True):
-                yield Path(row["image_path"])
-        elif self.image_dir:
-            # print("finding images on disk")
-            yield from find_images(self.image_dir, max=self.max_images)
+        """Yield image paths from the stored dataset."""
+        for path in self.get_image_data()["image_path"]:
+            yield Path(path)
 
     @property
     def image_count(self) -> int:
@@ -285,61 +265,54 @@ class ImageDataset(IterableDataset):
                 f"unsupported columns: {', '.join(sorted(unsupported_columns))}"
             )
 
-        image_paths = df["image_path"].to_numpy()
         features = df["features"].to_numpy()
         if features.ndim != 2:
             raise ValueError("features must be 2-dimensional")
 
-        # open as append so we can update without overwriting
-        with h5py.File(self.storage_path, "a") as f:
-            # get group for image information; create it if needed
-            img_grp = f.require_group(self.schema.image_group)
+        # open read/write so we can update without overwriting
+        with h5py.File(self.storage_path, "r+") as f:
+            # image group is created by create()
+            img_grp = f[self.schema.image_group]
 
             # Image paths are shared across models and must match feature vectors.
             # Check that saved images match the current set before making any updates.
-            # TODO: update this once we split out dataset creation from embed
-            if self.schema.image_ds_paths in img_grp:
-                img_df = self.get_image_data()
-                # error if any image paths are in the incoming df but not in the stored image paths
-                unknown_img_df = df.join(img_df, on="image_path", how="anti")
-                if unknown_img_df.height:
+            # TODO: replace pruning with aligning df to stored path order
+            img_df = self.get_image_data()
+            # error if any image paths are in the incoming df but not in the stored image paths
+            unknown_img_df = df.join(img_df, on="image_path", how="anti")
+            if unknown_img_df.height:
+                raise ValueError(
+                    "image paths do not match the existing dataset "
+                    f"({unknown_img_df.height} unknown paths)"
+                )
+            # check if total does not match
+            if img_df.height != df.height:
+                # if any features have already been saved, error
+                if len(img_grp.get(self.schema.all_models_group, [])):
                     raise ValueError(
-                        "image paths do not match the existing dataset "
-                        f"({unknown_img_df.height} unknown paths)"
+                        "cannot prune image paths when existing models are present"
                     )
-                # check if total does not match
-                if img_df.height != df.height:
-                    # if any features have already been saved, error
-                    has_model_features = len(
-                        img_grp.get(self.schema.all_models_group, [])
-                    )
-                    if has_model_features:
-                        raise ValueError(
-                            "cannot prune image paths when existing models are present"
-                        )
-                    else:
-                        # otherwise, prune invalid image paths and their corresponding sizes
-                        img_subset_df = df.join(img_df, on="image_path", how="left")
-                        # store paths relative to image dir
-                        base = Path(img_grp.attrs["image_dir"])
-                        subset_paths = [
-                            str(Path(p).relative_to(base))
-                            for p in img_subset_df["image_path"]
-                        ]
-                        # can't resize, so delete and recreate
-                        # TODO: move this somewhere shared?
-                        del img_grp[self.schema.image_ds_paths]
-                        del img_grp[self.schema.image_ds_sizes]
-                        img_grp.create_dataset(
-                            self.schema.image_ds_paths,
-                            data=subset_paths,
-                            compression="gzip",
-                        )
-                        img_grp.create_dataset(
-                            self.schema.image_ds_sizes,
-                            data=img_subset_df["image_size"].to_list(),
-                            compression="gzip",
-                        )
+                # otherwise, prune invalid image paths and their corresponding sizes;
+                # use stored sizes, not any image_size column on the incoming df
+                img_subset_df = df.select("image_path").join(
+                    img_df, on="image_path", how="left"
+                )
+                # store paths relative to image dir
+                base = Path(img_grp.attrs["image_dir"])
+                subset_paths = [
+                    str(Path(p).relative_to(base)) for p in img_subset_df["image_path"]
+                ]
+                # can't resize, so delete and recreate
+                del img_grp[self.schema.image_ds_paths]
+                del img_grp[self.schema.image_ds_sizes]
+                img_grp.create_dataset(
+                    self.schema.image_ds_paths, data=subset_paths, compression="gzip"
+                )
+                img_grp.create_dataset(
+                    self.schema.image_ds_sizes,
+                    data=img_subset_df["image_size"].to_list(),
+                    compression="gzip",
+                )
 
             # Features for a model already saved to this file are an error
             # unless overwrite is requested.
@@ -355,21 +328,7 @@ class ImageDataset(IterableDataset):
                 # (umap/cluster) will be invalid for the new features
                 del all_models_grp[model_group_name]
 
-            # Save shared metadata and create the new model only after validation.
-            # TODO: also save max if specified and extensions if not default
-            if self.schema.image_ds_paths not in img_grp:
-                # dataset not created via create(); store image dir as absolute
-                # and paths relative to it, same as create()
-                image_dir = Path(self.image_dir).resolve()
-                img_grp.attrs["image_dir"] = str(image_dir)
-                img_grp.create_dataset(
-                    self.schema.image_ds_paths,
-                    data=[
-                        str(Path(p).resolve().relative_to(image_dir))
-                        for p in image_paths
-                    ],
-                    compression="gzip",
-                )
+            # create the new model group only after validation
             model_grp = all_models_grp.create_group(model_group_name)
             # store model + preprocessing options so config can be reconstructed
             model_grp.attrs[self.schema.attr_model] = config.model.name
