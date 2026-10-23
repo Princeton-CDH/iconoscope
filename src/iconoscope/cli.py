@@ -69,16 +69,52 @@ def percentage(value: str) -> float:
     return round(percent / 100, 4)
 
 
-def positive_int(value: str) -> int:
+def int_range(
+    value: str, min_value: int | None = None, max_value: int | None = None
+) -> int:
+    """Parse an integer and check that it is within the specified range
+    (inclusive); either bound may be omitted."""
     try:
         integer = int(value)
     except ValueError:
         raise argparse.ArgumentTypeError(f"Could not convert `{value}` to integer")
-    if integer < 1:
-        raise argparse.ArgumentTypeError(
-            f"{value} must be a positive integer (1 or more)"
-        )
+    if (min_value is not None and integer < min_value) or (
+        max_value is not None and integer > max_value
+    ):
+        if max_value is None:
+            expected = f"{min_value} or more"
+        elif min_value is None:
+            expected = f"{max_value} or less"
+        else:
+            expected = f"between {min_value} and {max_value}"
+        raise argparse.ArgumentTypeError(f"{value} must be an integer {expected}")
     return integer
+
+
+def positive_int(value: str) -> int:
+    """Parse a positive integer (1 or more)."""
+    return int_range(value, min_value=1)
+
+
+#: default JPEG quality for generated images
+DEFAULT_JPEG_QUALITY = 90
+#: JPEG quality above this value increases file size with little visible benefit
+MAX_RECOMMENDED_JPEG_QUALITY = 95
+#: file extensions that are saved as JPEG (and use the quality setting)
+JPEG_SUFFIXES = {".jpg", ".jpeg"}
+
+
+def jpeg_quality(value: str) -> int:
+    """Parse JPEG quality as an integer from 1 to 100; warns if the
+    value is above the recommended maximum."""
+    quality = int_range(value, min_value=1, max_value=100)
+    if quality > MAX_RECOMMENDED_JPEG_QUALITY:
+        print(
+            f"Warning: JPEG quality above {MAX_RECOMMENDED_JPEG_QUALITY} "
+            "greatly increases file size with little visible improvement",
+            file=sys.stderr,
+        )
+    return quality
 
 
 # to keep the CLI responsive, subcommands are separate and only imported when needed
@@ -200,7 +236,14 @@ def main():
         help="Output image size; specify a single dimension for a square or both width and height as 1000x250. (default: %(default)s)",
     )
     parser_mosaic.add_argument(
-        "--jpeg-quality", type=int, default=90, dest="jpeg_quality"
+        "--jpeg-quality",
+        type=jpeg_quality,
+        # default is None to detect when quality is set for non-jpeg output;
+        # set to DEFAULT_JPEG_QUALITY after parsing
+        default=None,
+        dest="jpeg_quality",
+        help=f"JPEG quality, 1-100 (default: {DEFAULT_JPEG_QUALITY}); "
+        "ignored for other output formats",
     )
 
     ## cluster image features
@@ -222,6 +265,17 @@ def main():
     if args.command == "embed":
         if not args.dataset.is_file():
             parser.error(f"{args.dataset} is not an existing dataset file")
+    if args.command == "mosaic":
+        if args.jpeg_quality is None:
+            args.jpeg_quality = DEFAULT_JPEG_QUALITY
+        elif (
+            args.output is not None and args.output.suffix.lower() not in JPEG_SUFFIXES
+        ):
+            print(
+                f"Warning: --jpeg-quality is ignored for non-JPEG output "
+                f"({args.output.name})",
+                file=sys.stderr,
+            )
     args.func(args)
 
 

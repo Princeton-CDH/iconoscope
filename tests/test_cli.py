@@ -207,8 +207,8 @@ def test_positive_int(value, expected):
 @pytest.mark.parametrize(
     "value, message",
     [
-        ("0", "must be a positive integer"),
-        ("-5", "must be a positive integer"),
+        ("0", "must be an integer 1 or more"),
+        ("-5", "must be an integer 1 or more"),
         ("abc", "Could not convert"),
         ("1.5", "Could not convert"),
         ("", "Could not convert"),
@@ -328,4 +328,125 @@ def test_percentage_warns_below_one(capsys):
 @pytest.mark.parametrize("value", ["1", "60", "100"])
 def test_percentage_no_warning(value, capsys):
     cli.percentage(value)
+    assert capsys.readouterr().err == ""
+
+
+## int_range and jpeg quality
+
+
+@pytest.mark.parametrize(
+    "value, min_value, max_value, expected",
+    [
+        ("5", None, None, 5),
+        ("-5", None, None, -5),
+        ("1", 1, 10, 1),
+        ("10", 1, 10, 10),
+        ("1000", 1, None, 1000),
+        ("-1000", None, 0, -1000),
+    ],
+)
+def test_int_range(value, min_value, max_value, expected):
+    assert cli.int_range(value, min_value, max_value) == expected
+
+
+@pytest.mark.parametrize(
+    "value, min_value, max_value, message",
+    [
+        ("0", 1, 10, "must be an integer between 1 and 10"),
+        ("11", 1, 10, "must be an integer between 1 and 10"),
+        ("0", 1, None, "must be an integer 1 or more"),
+        ("1", None, 0, "must be an integer 0 or less"),
+        ("abc", 1, 10, "Could not convert"),
+        ("2.5", 1, 10, "Could not convert"),
+    ],
+)
+def test_int_range_invalid(value, min_value, max_value, message):
+    with pytest.raises(argparse.ArgumentTypeError, match=message):
+        cli.int_range(value, min_value, max_value)
+
+
+@pytest.mark.parametrize("value", ["1", "50", "90", "95"])
+def test_jpeg_quality(value, capsys):
+    assert cli.jpeg_quality(value) == int(value)
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("value", ["96", "100"])
+def test_jpeg_quality_warns_above_recommended(value, capsys):
+    assert cli.jpeg_quality(value) == int(value)
+    assert "Warning: JPEG quality above 95" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "101", "900", "0.9", "abc"])
+def test_jpeg_quality_invalid(value):
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli.jpeg_quality(value)
+
+
+def test_mosaic_jpeg_quality_default(tmp_path: Path, capsys):
+    args = run_cli(["mosaic", str(tmp_path / "d.h5")], "mosaic")
+    assert args.jpeg_quality == cli.DEFAULT_JPEG_QUALITY
+    assert capsys.readouterr().err == ""
+
+
+def test_mosaic_jpeg_quality(tmp_path: Path, capsys):
+    args = run_cli(["mosaic", str(tmp_path / "d.h5"), "--jpeg-quality", "80"], "mosaic")
+    assert args.jpeg_quality == 80
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("value", ["0", "101", "abc"])
+def test_mosaic_jpeg_quality_invalid(tmp_path: Path, value, capsys):
+    with (
+        patch("iconoscope.cli.import_module") as importer,
+        patch(
+            "sys.argv",
+            ["iconoscope", "mosaic", str(tmp_path / "d.h5"), "--jpeg-quality", value],
+        ),
+        pytest.raises(SystemExit),
+    ):
+        cli.main()
+    importer.assert_not_called()
+    assert "--jpeg-quality" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("output", ["out.jpg", "out.JPEG", "out.jpeg"])
+def test_mosaic_jpeg_quality_jpeg_output_no_warning(tmp_path: Path, output, capsys):
+    run_cli(
+        [
+            "mosaic",
+            str(tmp_path / "d.h5"),
+            "-o",
+            str(tmp_path / output),
+            "--jpeg-quality",
+            "80",
+        ],
+        "mosaic",
+    )
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("output", ["out.png", "out.webp", "out"])
+def test_mosaic_jpeg_quality_non_jpeg_output_warns(tmp_path: Path, output, capsys):
+    args = run_cli(
+        [
+            "mosaic",
+            str(tmp_path / "d.h5"),
+            "-o",
+            str(tmp_path / output),
+            "--jpeg-quality",
+            "80",
+        ],
+        "mosaic",
+    )
+    assert args.jpeg_quality == 80
+    assert "--jpeg-quality is ignored for non-JPEG output" in capsys.readouterr().err
+
+
+def test_mosaic_non_jpeg_output_without_quality_no_warning(tmp_path: Path, capsys):
+    # default quality should not trigger the non-jpeg warning
+    args = run_cli(
+        ["mosaic", str(tmp_path / "d.h5"), "-o", str(tmp_path / "out.png")], "mosaic"
+    )
+    assert args.jpeg_quality == cli.DEFAULT_JPEG_QUALITY
     assert capsys.readouterr().err == ""
