@@ -62,13 +62,16 @@ def test_canvas_too_small_message_square():
     message = mosaic.canvas_too_small_message(err)
     assert str(err) in message
     width, _ = err.min_canvas
-    assert f"Try --limit {err.max_images} or --size {width}" in message
+    assert (
+        f"To fix, use --limit {err.max_images} or lower, or --size {width} or larger"
+        in message
+    )
 
 
 def test_canvas_too_small_message_rectangle():
     err = make_canvas_error(20000, 2000, 200)
     width, height = err.min_canvas
-    assert f"--size {width}x{height}" in mosaic.canvas_too_small_message(err)
+    assert f"--size {width}x{height} or larger" in mosaic.canvas_too_small_message(err)
 
 
 def test_canvas_too_small_message_no_images_fit():
@@ -76,7 +79,8 @@ def test_canvas_too_small_message_no_images_fit():
     err = make_canvas_error(10, 19, 19)
     message = mosaic.canvas_too_small_message(err)
     assert "--limit" not in message
-    assert "Try --size" in message
+    assert "To fix, use --size" in message
+    assert "or larger" in message
 
 
 @patch("iconoscope.commands.mosaic.generate_mosaic")

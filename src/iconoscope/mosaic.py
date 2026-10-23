@@ -242,24 +242,22 @@ def max_images_for_canvas(
     upper_bound: int,
     min_cell_size: int = MIN_THUMB_SIZE,
 ) -> int:
-    """Return a number of images (up to ``upper_bound``) that fits on the
-    canvas at the minimum cell size; returns 0 if not even one image fits.
+    """Return the largest number of images (up to ``upper_bound``) such that
+    that number *and every smaller number* fits on the canvas at the minimum
+    cell size; returns 0 if not even one image fits.
 
-    Fit is not strictly monotonic in image count (rounding and grid choice can
-    make a slightly smaller count produce slightly smaller cells), so the result
-    is guaranteed to fit and is close to the maximum, but not necessarily the
-    maximum, and some smaller counts may not fit."""
-    if not fits_canvas(1, canvas_width, canvas_height, aspect_ratio, min_cell_size):
-        return 0
-    # binary search; invariant: lo always fits
-    lo, hi = 1, upper_bound
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if fits_canvas(mid, canvas_width, canvas_height, aspect_ratio, min_cell_size):
-            lo = mid
-        else:
-            hi = mid - 1
-    return lo
+    Fit is not strictly monotonic in image count: rounding and grid choice can
+    make a slightly larger count produce slightly larger cells. For example, on
+    a 2000x2000 canvas with 3:2 images, 6,936 fits, 6,937-7,004 do not, and
+    7,005-7,038 fit again. Scanning up to the first count that does not fit
+    guarantees that any value up to the result can be used as a limit.
+    (Linear, but each check is cheap: roughly 0.1s for 50,000 images.)"""
+    count = 0
+    while count < upper_bound and fits_canvas(
+        count + 1, canvas_width, canvas_height, aspect_ratio, min_cell_size
+    ):
+        count += 1
+    return count
 
 
 def min_canvas_for_images(
@@ -269,11 +267,15 @@ def min_canvas_for_images(
     aspect_ratio: float,
     min_cell_size: int = MIN_THUMB_SIZE,
 ) -> tuple[int, int]:
-    """Return a canvas size (width, height), with the same proportions as the
-    requested canvas, that fits ``image_count`` images at the minimum cell size.
+    """Return the smallest canvas size (width, height), with the same proportions
+    as the requested canvas, that fits ``image_count`` images at the minimum
+    cell size.
 
-    As with :func:`max_images_for_canvas`, the result is guaranteed to fit and
-    is close to the smallest such size, but not necessarily the smallest."""
+    Unlike image count, fit is effectively monotonic in canvas size for a fixed
+    proportion: grid choice depends only on the canvas proportions, not its
+    scale, so cells grow as the canvas grows and larger canvases with the same
+    proportions also fit. (Rounding the scaled height to whole pixels could in
+    principle perturb this; tests scan larger sizes to confirm.)"""
     proportion = canvas_height / canvas_width
 
     def scaled(width: int) -> tuple[int, int]:

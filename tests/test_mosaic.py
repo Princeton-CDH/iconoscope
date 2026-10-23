@@ -244,15 +244,23 @@ def test_max_images_for_canvas(canvas_width, canvas_height, aspect_ratio) -> Non
         canvas_width, canvas_height, aspect_ratio, upper_bound
     )
     assert 0 < max_images < upper_bound
-    # result fits
-    assert mosaic.fits_canvas(max_images, canvas_width, canvas_height, aspect_ratio)
-    # close to the true maximum (fit is not strictly monotonic; see docstring)
-    true_max = max(
-        n
-        for n in range(1, max_images * 2)
-        if mosaic.fits_canvas(n, canvas_width, canvas_height, aspect_ratio)
+    # every count up to the result fits, so any limit up to it is safe
+    assert all(
+        mosaic.fits_canvas(n, canvas_width, canvas_height, aspect_ratio)
+        for n in range(1, max_images + 1)
     )
-    assert max_images >= true_max * 0.9
+    # and the next count does not
+    assert not mosaic.fits_canvas(
+        max_images + 1, canvas_width, canvas_height, aspect_ratio
+    )
+
+
+def test_max_images_for_canvas_non_monotonic() -> None:
+    # 2000x2000, 3:2 images: 6,936 fits, 6,937-7,004 do not, 7,005-7,038 fit again;
+    # the suggested limit must be below the first gap
+    assert mosaic.fits_canvas(7038, 2000, 2000, 1.5)
+    assert not mosaic.fits_canvas(6937, 2000, 2000, 1.5)
+    assert mosaic.max_images_for_canvas(2000, 2000, 1.5, 100_000) == 6936
 
 
 def test_max_images_for_canvas_bounds() -> None:
@@ -280,9 +288,15 @@ def test_min_canvas_for_images(
     assert mosaic.fits_canvas(image_count, width, height, aspect_ratio)
     # preserves the proportions of the requested canvas
     assert height / width == pytest.approx(canvas_height / canvas_width, rel=0.01)
-    # near the smallest: a canvas 2% smaller does not fit
-    smaller = (round(width * 0.98), round(height * 0.98))
-    assert not mosaic.fits_canvas(image_count, *smaller, aspect_ratio)
+    # smallest: one pixel narrower does not fit
+    proportion = canvas_height / canvas_width
+    if width > 1:
+        smaller = (width - 1, max(1, round((width - 1) * proportion)))
+        assert not mosaic.fits_canvas(image_count, *smaller, aspect_ratio)
+    # any larger size with the same proportions also fits
+    for larger_width in range(width, width * 2):
+        larger = (larger_width, max(1, round(larger_width * proportion)))
+        assert mosaic.fits_canvas(image_count, *larger, aspect_ratio)
 
 
 def test_check_canvas_size_ok() -> None:
