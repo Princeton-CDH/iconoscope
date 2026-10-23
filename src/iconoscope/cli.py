@@ -117,6 +117,47 @@ def jpeg_quality(value: str) -> int:
     return quality
 
 
+#: commands that operate on stored features and accept --config
+STORED_CONFIG_COMMANDS = {"mosaic", "cluster", "umap"}
+
+
+def add_model_args(parser: argparse.ArgumentParser, stored: bool = False) -> None:
+    """Add embedding model and preprocessing options. When ``stored`` is True
+    (for commands that use existing features), the model has no parser
+    default, so the command can tell whether model options were specified."""
+    parser.add_argument(
+        "-m",
+        "--model",
+        choices=list(AVAILABLE_MODELS),
+        default=None if stored else DEFAULT_MODEL.name,
+        help=f"Embedding model (default: {DEFAULT_MODEL.name})",
+    )
+    parser.add_argument(
+        "--center-crop",
+        type=percentage,
+        metavar="CROP",
+        help=(
+            "Center crop images before embedding: percentage of image to retain, "
+            "greater than 0 and up to 100 (e.g., 60 to use central 60%% of image). "
+            "Crop is square, relative to the shortest edge, and replaces the "
+            "model's default resizing and cropping."
+        ),
+    )
+    parser.add_argument(
+        "--grayscale",
+        action="store_true",
+        default=False,
+        help="Convert images to grayscale before generate embeddings",
+    )
+
+
+def model_opts_specified(args: argparse.Namespace) -> bool:
+    """True if --model or any preprocessing option was specified."""
+    return (
+        args.model is not None or args.center_crop is not None or bool(args.grayscale)
+    )
+
+
 # to keep the CLI responsive, subcommands are separate and only imported when needed
 HANDLERS = {
     "create": ("iconoscope.commands.create", "main"),
@@ -124,6 +165,7 @@ HANDLERS = {
     "info": ("iconoscope.commands.info", "main"),
     "mosaic": ("iconoscope.commands.mosaic", "main"),
     "cluster": ("iconoscope.commands.cluster", "main"),
+    "umap": ("iconoscope.commands.umap", "main"),
 }
 
 
@@ -161,31 +203,32 @@ def main():
         help="File path for the image dataset (.hdf5)",
     )
 
-    # model arguments
+    # model arguments for embed
     model_parser = argparse.ArgumentParser(add_help=False)
-    model_parser.add_argument(
-        "-m",
-        "--model",
-        choices=list(AVAILABLE_MODELS),
-        default=DEFAULT_MODEL.name,
-        help="Embedding model (default: %(default)s)",
+    add_model_args(model_parser)
+
+    # model arguments for steps after embed: select stored features either
+    # by model + preprocessing options or by MODEL/KEY label
+    stored_model_parser = argparse.ArgumentParser(add_help=False)
+    add_model_args(stored_model_parser, stored=True)
+    stored_model_parser.add_argument(
+        "-c",
+        "--config",
+        metavar="MODEL/KEY",
+        help="Stored embedding configuration as model/key (as shown by "
+        "iconoscope info); alternative to --model and preprocessing options",
     )
-    model_parser.add_argument(
-        "--center-crop",
-        type=percentage,
-        metavar="CROP",
-        help=(
-            "Center crop images before embedding: percentage of image to retain, "
-            "greater than 0 and up to 100 (e.g., 60 to use central 60%% of image). "
-            "Crop is square, relative to the shortest edge, and replaces the "
-            "model's default resizing and cropping."
-        ),
-    )
-    model_parser.add_argument(
-        "--grayscale",
-        action="store_true",
-        default=False,
-        help="Convert images to grayscale before generate embeddings",
+    # umap allows multiple configurations
+    multi_model_parser = argparse.ArgumentParser(add_help=False)
+    add_model_args(multi_model_parser, stored=True)
+    multi_model_parser.add_argument(
+        "-c",
+        "--config",
+        metavar="MODEL/KEY",
+        action="append",
+        help="Stored embedding configuration as model/key (as shown by "
+        "iconoscope info); can be repeated; alternative to --model and "
+        "preprocessing options",
     )
 
     ## embed : extract features from an existing dataset
@@ -214,7 +257,7 @@ def main():
 
     ## generate mosaic
     parser_mosaic = subparsers.add_parser(
-        "mosaic", parents=[model_parser, limit_parser]
+        "mosaic", parents=[stored_model_parser, limit_parser]
     )
     parser_mosaic.add_argument(
         "dataset",
@@ -248,7 +291,7 @@ def main():
     )
 
     ## cluster image features
-    cluster_parser = subparsers.add_parser("cluster", parents=[model_parser])
+    cluster_parser = subparsers.add_parser("cluster", parents=[stored_model_parser])
     cluster_parser.add_argument(
         "dataset",
         type=Path,
@@ -257,15 +300,45 @@ def main():
     cluster_parser.add_argument(
         "n_clusters", type=positive_int, help="Number of clusters"
     )
+
+    ## compute umap coordinates
+    umap_parser = subparsers.add_parser(
+        "umap",
+        parents=[multi_model_parser],
+        help="Calculate and save UMAP coordinates for stored features",
+        description="Calculate and save UMAP coordinates for stored features; "
+        "if no model or configuration is specified, calculates for all.",
+    )
+    umap_parser.add_argument(
+        "dataset",
+        type=Path,
+        help="Image dataset file created by iconoscope embed (.hdf5)",
+    )
+    umap_parser.add_argument(
+        "-u",
+        "--update",
+        action="store_true",
+        default=False,
+        help="Recalculate UMAP even if it already exists",
+    )
     parser.set_defaults(func=dispatch)
 
     # Validate embed sources before lazy-loading the embedding stack.
     args = parser.parse_args()
     if not args.command:
         parser.error("You must specify which command to run")
-    if args.command == "embed":
+    if args.command in {"embed"} | STORED_CONFIG_COMMANDS:
         if not args.dataset.is_file():
             parser.error(f"{args.dataset} is not an existing dataset file")
+    if args.command in STORED_CONFIG_COMMANDS:
+        if args.config and model_opts_specified(args):
+            parser.error(
+                "--config cannot be combined with --model or preprocessing options"
+            )
+        # single-config commands use the default model when nothing is specified;
+        # umap without any model options runs for all stored configurations
+        if args.command != "umap" and not args.config and args.model is None:
+            args.model = DEFAULT_MODEL.name
     if args.command == "mosaic":
         if args.jpeg_quality is None:
             args.jpeg_quality = DEFAULT_JPEG_QUALITY
