@@ -56,6 +56,19 @@ def percentage(value: str) -> float:
     return round(percent / 100, 4)
 
 
+def positive_int(value: str) -> int:
+    try:
+        integer = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Could not convert `{value}` to integer")
+    if integer < 1:
+        raise argparse.ArgumentTypeError(
+            f"{value} must be a positive integer (1 or more)"
+        )
+    return integer
+
+
+# to keep the CLI responsive, subcommands are separate and only imported when needed
 HANDLERS = {
     "create": ("iconoscope.commands.create", "main"),
     "embed": ("iconoscope.commands.embed", "main"),
@@ -66,6 +79,7 @@ HANDLERS = {
 
 
 def dispatch(args: argparse.Namespace) -> None:
+    # Import and run the specified subcommand with the specified arguments
     module_name, handler_name = HANDLERS[args.command]
     handler = getattr(import_module(module_name), handler_name)
     handler(args)
@@ -75,8 +89,17 @@ def main():
     parser = argparse.ArgumentParser(prog="iconoscope")
     subparsers = parser.add_subparsers(dest="command")
 
+    # limit option shared by create and mosaic options
+    limit_parser = argparse.ArgumentParser(add_help=False)
+    limit_parser.add_argument(
+        "-l",
+        "--limit",
+        type=positive_int,
+        help="Limit to the specified number of images (arbitrary subset, not sorted)",
+    )
+
     ## create : discover and validate images into a dataset
-    parser_create = subparsers.add_parser("create")
+    parser_create = subparsers.add_parser("create", parents=[limit_parser])
     parser_create.add_argument(
         "image_dir",
         type=existing_directory,
@@ -87,16 +110,11 @@ def main():
         type=new_file,
         help="File path for the image dataset (.hdf5)",
     )
-    parser_create.add_argument(
-        "-m",
-        "--max",
-        type=int,
-        help="Limit to specified number of images (arbitrary subset, not sorted)",
-    )
 
     # model arguments
     model_parser = argparse.ArgumentParser(add_help=False)
     model_parser.add_argument(
+        "-m",
         "--model",
         choices=list(AVAILABLE_MODELS),
         default=DEFAULT_MODEL.name,
@@ -145,7 +163,9 @@ def main():
     )
 
     ## generate mosaic
-    parser_mosaic = subparsers.add_parser("mosaic", parents=[model_parser])
+    parser_mosaic = subparsers.add_parser(
+        "mosaic", parents=[model_parser, limit_parser]
+    )
     parser_mosaic.add_argument(
         "dataset",
         type=Path,
@@ -169,12 +189,6 @@ def main():
     parser_mosaic.add_argument(
         "--jpeg-quality", type=int, default=90, dest="jpeg_quality"
     )
-    parser_mosaic.add_argument(
-        "-l",
-        "--limit",
-        type=int,
-        help="Limit to sample of images of the specified size",
-    )
 
     ## cluster image features
     cluster_parser = subparsers.add_parser("cluster", parents=[model_parser])
@@ -183,7 +197,9 @@ def main():
         type=Path,
         help="Image dataset file created by iconoscope embed (.hdf5)",
     )
-    cluster_parser.add_argument("n_clusters", type=int, help="Number of clusters")
+    cluster_parser.add_argument(
+        "n_clusters", type=positive_int, help="Number of clusters"
+    )
     parser.set_defaults(func=dispatch)
 
     # Validate embed sources before lazy-loading the embedding stack.
