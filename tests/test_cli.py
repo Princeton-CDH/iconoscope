@@ -253,18 +253,55 @@ def test_size_tuple():
     # width x height
     assert cli.size_tuple("150x250") == argparse.Namespace(width=150, height=250)
 
+    # minimum size is allowed
+    min_size = cli.MIN_IMAGE_SIZE
+    assert cli.size_tuple(str(min_size)) == argparse.Namespace(
+        width=min_size, height=min_size
+    )
+
     # errors
     # too many dimensions
-    with pytest.raises(ValueError, match="Could not parse"):
+    with pytest.raises(argparse.ArgumentTypeError, match="Could not parse"):
         cli.size_tuple("100x200x300")
     # too few
-    with pytest.raises(ValueError, match="invalid literal"):
+    with pytest.raises(argparse.ArgumentTypeError, match="invalid literal"):
         cli.size_tuple("")
     # non-numeric
-    with pytest.raises(ValueError, match="invalid literal"):
+    with pytest.raises(argparse.ArgumentTypeError, match="invalid literal"):
         cli.size_tuple("a")
-    with pytest.raises(ValueError, match="invalid literal"):
+    with pytest.raises(argparse.ArgumentTypeError, match="invalid literal"):
         cli.size_tuple("10xb")
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["0", "-200", "99", "0x500", "500x0", "500x-500", "-500x500", "99x500", "500x99"],
+)
+def test_size_tuple_too_small(value):
+    with pytest.raises(argparse.ArgumentTypeError, match="too small"):
+        cli.size_tuple(value)
+
+
+def test_mosaic_size(tmp_path: Path):
+    args = run_cli(["mosaic", str(tmp_path / "d.h5"), "-s", "1000x250"], "mosaic")
+    assert args.size == argparse.Namespace(width=1000, height=250)
+    # default
+    args = run_cli(["mosaic", str(tmp_path / "d.h5")], "mosaic")
+    assert args.size == argparse.Namespace(width=2000, height=2000)
+
+
+@pytest.mark.parametrize("value", ["0", "50", "500x-1", "abc"])
+def test_mosaic_size_invalid(tmp_path: Path, value, capsys):
+    with (
+        patch("iconoscope.cli.import_module") as importer,
+        patch(
+            "sys.argv", ["iconoscope", "mosaic", str(tmp_path / "d.h5"), "-s", value]
+        ),
+        pytest.raises(SystemExit),
+    ):
+        cli.main()
+    importer.assert_not_called()
+    assert "--size" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

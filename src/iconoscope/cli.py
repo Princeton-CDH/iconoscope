@@ -6,18 +6,31 @@ from pathlib import Path
 from iconoscope.models import AVAILABLE_MODELS, DEFAULT_MODEL
 
 
+#: minimum width/height in pixels for generated images
+MIN_IMAGE_SIZE = 100
+
+
 def size_tuple(size_str: str | int) -> argparse.Namespace:
+    """Parse a size as a single dimension (square) or WIDTHxHEIGHT.
+    Both dimensions must be at least :data:`MIN_IMAGE_SIZE` pixels."""
     try:
         parts = [int(side) for side in str(size_str).split("x")]
     except ValueError as err:
-        raise ValueError(f"Could not parse `{size_str}` as a size: {err}") from err
+        raise argparse.ArgumentTypeError(
+            f"Could not parse `{size_str}` as a size: {err}"
+        ) from err
     # first portion is the width
     width = parts.pop(0)
     # if a second value is present, use as height; otherwise width
     height = parts.pop() if parts else width
-    # if there are parts leftover, raise value error
+    # if there are parts leftover, too many dimensions were specified
     if parts:
-        raise ValueError(f"Could not parse `{size_str}` as a size")
+        raise argparse.ArgumentTypeError(f"Could not parse `{size_str}` as a size")
+    if width < MIN_IMAGE_SIZE or height < MIN_IMAGE_SIZE:
+        raise argparse.ArgumentTypeError(
+            f"Size `{size_str}` is too small; width and height must be "
+            f"at least {MIN_IMAGE_SIZE}"
+        )
     return argparse.Namespace(width=width, height=height)
 
 
