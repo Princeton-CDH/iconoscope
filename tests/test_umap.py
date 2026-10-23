@@ -3,12 +3,18 @@ from unittest.mock import patch
 
 import numpy as np
 import polars as pl
+import pytest
 
 from iconoscope.dataset import ImageDataset
 from iconoscope.models import DEFAULT_MODEL, EmbeddingConfig
-from iconoscope.umap import get_or_compute_umap
+from iconoscope.umap import MIN_UMAP_IMAGES, get_or_compute_umap, reduce_features
 
 CONFIG = EmbeddingConfig(DEFAULT_MODEL)
+
+
+def test_reduce_features_too_few():
+    with pytest.raises(ValueError, match="at least"):
+        reduce_features(np.zeros((MIN_UMAP_IMAGES - 1, 8), dtype=np.float32))
 
 
 def test_get_or_compute_umap(tmp_path: Path, tmp_image_dir: Path):

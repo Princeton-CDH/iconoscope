@@ -9,11 +9,18 @@ from iconoscope.models import EmbeddingConfig
 
 logger = logging.getLogger(__name__)
 
+#: UMAP fails on very small inputs; not intended for tiny datasets
+MIN_UMAP_IMAGES = 16
+
 
 def reduce_features(features: np.ndarray) -> np.ndarray:
     """Takes an array of embedding feature vectors and returns normalized coordinates.
     Uses PCA to reduce, UMAP to transform to two dimensions, then normalize from 0 to 1 for
     both axes. Returns an array of x,y coordinates for each feature vector in the input."""
+    if features.shape[0] < MIN_UMAP_IMAGES:
+        raise ValueError(
+            f"UMAP requires at least {MIN_UMAP_IMAGES} images; got {features.shape[0]}"
+        )
     # use PCA to reduce vectors from 768 to 50 (but handle small datasets < 50)
     n_components = min(50, features.shape[0], features.shape[1])
     reduced = PCA(n_components=n_components).fit_transform(features)
