@@ -3,7 +3,7 @@
 # dependencies = [
 #     "anywidget",
 #     "h5py",
-#     "iconoscope @ git+https://github.com/rlskoeser/iconoscope@feature/pgp-notebook",
+#     "iconoscope @ git+https://github.com/Princeton-CDH/iconoscope@develop",
 #     "marimo>=0.25.1",
 #     "numpy",
 #     "piffle",
@@ -74,7 +74,7 @@ def _(mo):
     Fragment images were retrieved via IIIF with a custom script based on PGP metadata.
 
     Embeddings and 2D [UMAP](https://umap-learn.readthedocs.io/) projections were precomputed with
-    [iconoscope](https://github.com/rlskoeser/iconoscope) and stored in an HDF5 file.
+    [iconoscope](https://github.com/Princeton-CDH/iconoscope) and stored in an HDF5 file.
     Images are linked by shelfmark to PGP document metadata loaded from
     [pgp-metadata](https://github.com/princetongenizalab/pgp-metadata).
     """)
@@ -1150,8 +1150,8 @@ def _(ObservablePlot, Path, mo, traitlets, urllib):
         MORPH_JS = _js_path.read_text()
     else:
         with urllib.request.urlopen(
-            "https://raw.githubusercontent.com/rlskoeser/iconoscope/"
-            "feature/pgp-notebook/notebooks/umap_to_grid.js"
+            "https://raw.githubusercontent.com/Princeton-CDH/iconoscope/"
+            "develop/notebooks/umap_to_grid.js"
         ) as _resp:
             MORPH_JS = _resp.read().decode()
 
