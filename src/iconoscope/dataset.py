@@ -10,7 +10,6 @@ from PIL import Image
 
 from iconoscope.models import EmbeddingConfig
 from iconoscope.store import DatasetStore, StorageSchema
-from iconoscope.umap import reduce_features
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +243,15 @@ class ImageDataset:
         separately."""
         self.store.write_clusters(config, labels, n_clusters, method=method)
 
+    def has_umap(self, config: EmbeddingConfig) -> bool:
+        """Check if umap coordinates are stored for a configuration."""
+        return self.store.umap(config) is not None
+
+    def save_umap(self, coords: np.ndarray, config: EmbeddingConfig) -> None:
+        """Save (or replace) umap coordinates for a configuration; see
+        :func:`iconoscope.umap.get_or_compute_umap` to generate them."""
+        self.store.write_umap(config, coords)
+
     def info(self) -> dict:
         # single file open shared by all store reads below
         with self.store.open("r") as store:
@@ -324,17 +332,16 @@ class ImageDataset:
         umap=False,
         clusters: bool | int = False,
     ) -> pl.DataFrame:
-        """Load image data, optionally with features, umap coordinates, and
-        cluster labels for an embedding configuration. Umap coordinates are
-        calculated and saved if not present.
+        """Load stored image data, optionally with features, umap coordinates,
+        and cluster labels for an embedding configuration. Read-only; raises
+        ValueError if umap is requested but not stored (use
+        :func:`iconoscope.umap.get_or_compute_umap` to generate it first).
 
         `clusters` may be True to include all stored cluster results, or a
         number of clusters to include only kmeans results for that k. Cluster
         labels are included as columns named ``cluster_{method}_{n_clusters}``.
         """
-        # if umap is requested, open in read/write mode in case we need to save
-        read_mode = "r+" if umap else "r"
-        with self.store.open(read_mode) as store:
+        with self.store.open("r") as store:
             # image paths, sizes, and aspect ratio from the store
             img_df = store.image_data() if paths else None
             data = {}
@@ -346,26 +353,17 @@ class ImageDataset:
                         "model configuration is required to load features or umap"
                     )
 
-                feature_data = None
                 if umap:
                     umap_coords = store.umap(config)
-                    # if umap has not yet been generated, calculate and save
                     if umap_coords is None:
-                        logger.info(
-                            "UMAP not present for %s; calculating", config.label
+                        raise ValueError(
+                            f"UMAP not present for '{config.label}'; "
+                            "generate with iconoscope.umap.get_or_compute_umap()"
                         )
-                        feature_data = store.features(config)
-                        umap_coords = reduce_features(feature_data)
-                        store.write_umap(config, umap_coords)
-                    else:
-                        logger.debug("Loading saved UMAP for %s", config.label)
                     data["umap"] = umap_coords
 
                 if features:
-                    # load features if not already loaded for umap
-                    if feature_data is None:
-                        feature_data = store.features(config)
-                    data["features"] = feature_data
+                    data["features"] = store.features(config)
 
             # include cluster labels when requested and present in the data
             # (bool is a subclass of int, so check for it explicitly)

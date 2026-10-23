@@ -514,6 +514,35 @@ def test_load_data_requires_model(tmp_path: Path, tmp_image_dir: Path, kwargs):
         dataset.load_data(**kwargs)
 
 
+def test_load_data_umap_missing(tmp_path: Path, tmp_image_dir: Path):
+    dataset = ImageDataset.create(
+        storage_path=tmp_path / "data.h5", image_dir=tmp_image_dir
+    )
+    df = dataset.get_image_data().with_columns(
+        features=pl.Series(np.zeros((dataset.image_count, 4), dtype=np.float32))
+    )
+    dataset.save_features(df.select("image_path", "features"), CONFIG)
+    with pytest.raises(ValueError, match="get_or_compute_umap"):
+        dataset.load_data(CONFIG, umap=True)
+
+
+def test_save_umap(tmp_path: Path, tmp_image_dir: Path):
+    dataset = ImageDataset.create(
+        storage_path=tmp_path / "data.h5", image_dir=tmp_image_dir
+    )
+    n = dataset.image_count
+    df = dataset.get_image_data().with_columns(
+        features=pl.Series(np.zeros((n, 4), dtype=np.float32))
+    )
+    dataset.save_features(df.select("image_path", "features"), CONFIG)
+    assert not dataset.has_umap(CONFIG)
+    coords = np.random.default_rng(0).random((n, 2))
+    dataset.save_umap(coords, CONFIG)
+    assert dataset.has_umap(CONFIG)
+    loaded = dataset.load_data(CONFIG, umap=True)
+    assert np.allclose(loaded["umap"].to_numpy(), coords)
+
+
 ## embedding configuration / preprocessing options
 
 

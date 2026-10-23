@@ -1,6 +1,13 @@
+import logging
+
 import numpy as np
 import umap
 from sklearn.decomposition import PCA
+
+from iconoscope.dataset import ImageDataset
+from iconoscope.models import EmbeddingConfig
+
+logger = logging.getLogger(__name__)
 
 
 def reduce_features(features: np.ndarray) -> np.ndarray:
@@ -18,3 +25,20 @@ def reduce_features(features: np.ndarray) -> np.ndarray:
     min_coords, max_coords = coords.min(0), coords.max(0)
     span = np.where(max_coords - min_coords > 0, max_coords - min_coords, 1.0)
     return (coords - min_coords) / span
+
+
+def get_or_compute_umap(
+    img_dataset: ImageDataset, config: EmbeddingConfig, overwrite: bool = False
+) -> np.ndarray:
+    """Return umap coordinates for a configuration from the dataset; if not
+    stored (or ``overwrite`` is True), calculate from stored features via
+    :func:`reduce_features` and save to the dataset."""
+    if not overwrite and img_dataset.has_umap(config):
+        logger.debug("Loading saved UMAP for %s", config.label)
+        df = img_dataset.load_data(config, paths=False, umap=True)
+        return df["umap"].to_numpy()
+    logger.info("Calculating UMAP for %s", config.label)
+    features = img_dataset.load_data(config, paths=False, features=True)["features"]
+    coords = reduce_features(features.to_numpy())
+    img_dataset.save_umap(coords, config)
+    return coords

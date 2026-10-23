@@ -12,6 +12,7 @@ from scipy.spatial.distance import cdist
 
 from iconoscope.dataset import ImageDataset
 from iconoscope.models import EmbeddingConfig
+from iconoscope.umap import get_or_compute_umap
 
 LAPJV_CELL_LIMIT = 5000
 
@@ -442,7 +443,8 @@ def generate_mosaic(
     if output is None:
         output = img_dataset.storage_path.with_suffix(".jpg")
 
-    # load image embeddings from hdf5 file for specified model
+    # generate umap coordinates if not already stored, then load image data with umap
+    get_or_compute_umap(img_dataset, config)
     df = img_dataset.load_data(config, umap=True)
 
     # if a sample is requested, select a random sample of the specified size
