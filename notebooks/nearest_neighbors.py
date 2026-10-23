@@ -248,11 +248,13 @@ def _(dataset, models, np, pl):
     image_df = dataset.get_image_data().with_row_index("idx")
     model_data = {}
     for _label, _config in models.items():
-        _df = dataset.load_data(config=_config, features=True, umap=True)
+        # neighbors only need features; umap is optional (None if not stored)
+        _has_umap = dataset.has_umap(_config)
+        _df = dataset.load_data(config=_config, features=True, umap=_has_umap)
         _feats = _df["features"].to_numpy().astype(np.float32)
         # L2-normalize so dot product == cosine similarity
         _feats /= np.linalg.norm(_feats, axis=1, keepdims=True).clip(min=1e-12)
-        _umap = _df["umap"].to_numpy()
+        _umap = _df["umap"].to_numpy() if _has_umap else None
         model_data[_label] = {
             "features": _feats,
             "umap": pl.DataFrame(
@@ -261,7 +263,9 @@ def _(dataset, models, np, pl):
                     "umap1": _umap[:, 0],
                     "umap2": _umap[:, 1],
                 }
-            ),
+            )
+            if _has_umap
+            else None,
         }
     return image_df, model_data
 
@@ -452,14 +456,28 @@ def _(mo):
 
 
 @app.cell
-def _(image_df, model_data, neighbors, pl, query_idx, selected_models):
+def _(image_df, mo, model_data, neighbors, pl, query_idx, selected_models):
+    # models without stored umap are omitted from the umap plots
+    _no_umap = [_n for _n in selected_models if model_data[_n]["umap"] is None]
+    umap_models = [_n for _n in selected_models if _n not in _no_umap]
+    mo.stop(
+        not umap_models,
+        mo.callout(
+            mo.md(
+                "No UMAP stored for the selected models; run `iconoscope mosaic` to generate."
+            ),
+            kind="warn",
+        ),
+    )
+    if _no_umap:
+        print(f"No UMAP stored (omitted from plots): {', '.join(_no_umap)}")
     # Long dataframe of all models' UMAP coords, each re-centered so that
     # the query image sits at (0, 0). UMAP coords are already normalized to
     # [0, 1] per model, so the centered offsets are on comparable scales.
     # Note: UMAP orientation is arbitrary, so only distance from the
     # center is meaningful when comparing models — not direction.
     _frames = []
-    for _name in selected_models:
+    for _name in umap_models:
         _umap = model_data[_name]["umap"]
         _q = _umap.filter(pl.col.idx == query_idx).row(0, named=True)
         _nbr = neighbors[_name].select("idx", "rank", "similarity")
@@ -480,7 +498,7 @@ def _(image_df, model_data, neighbors, pl, query_idx, selected_models):
         .join(image_df.select("idx", "image_path"), on="idx", how="left")
         .with_columns(dist=(pl.col.dx**2 + pl.col.dy**2).sqrt())
     )
-    return (umap_df,)
+    return umap_df, umap_models
 
 
 @app.cell
@@ -489,7 +507,7 @@ def _(
     max_background,
     mo,
     pl,
-    selected_models,
+    umap_models,
     show_background,
     umap_df,
     umap_view,
@@ -553,8 +571,8 @@ def _(
         # one plot: every model's neighbors overlaid, colored by model
         _color = alt.Color(
             "model:N",
-            sort=selected_models,
-            scale=alt.Scale(domain=selected_models),
+            sort=umap_models,
+            scale=alt.Scale(domain=umap_models),
             legend=alt.Legend(title="model"),
         )
         _chart = (
@@ -570,7 +588,7 @@ def _(
     else:
         # small multiples, each centered on the query with a shared scale
         _charts = []
-        for _name in selected_models:
+        for _name in umap_models:
             # background in grey, neighbors in blue
             _c = alt.layer(
                 _rules,
@@ -596,14 +614,14 @@ def _(
 
 
 @app.cell
-def _(alt, pl, selected_models, umap_df):
+def _(alt, pl, umap_models, umap_df):
     # Distance from query in UMAP space vs. neighbor rank, per model —
     # an orientation-independent way to compare models on one plot.
     _df = umap_df.filter(pl.col.role == "neighbor")
     alt.Chart(_df).mark_line(point=True).encode(
         x=alt.X("rank:O", title="neighbor rank"),
         y=alt.Y("dist:Q", title="UMAP distance from query"),
-        color=alt.Color("model:N", scale=alt.Scale(domain=selected_models)),
+        color=alt.Color("model:N", scale=alt.Scale(domain=umap_models)),
         tooltip=[
             "model",
             "rank",

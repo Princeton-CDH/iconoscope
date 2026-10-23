@@ -536,9 +536,12 @@ def test_save_umap(tmp_path: Path, tmp_image_dir: Path):
     )
     dataset.save_features(df.select("image_path", "features"), CONFIG)
     assert not dataset.has_umap(CONFIG)
+    assert list(dataset.configs_by_label()) == [CONFIG.label]
+    assert dataset.configs_by_label(require_umap=True) == {}
     coords = np.random.default_rng(0).random((n, 2))
     dataset.save_umap(coords, CONFIG)
     assert dataset.has_umap(CONFIG)
+    assert list(dataset.configs_by_label(require_umap=True)) == [CONFIG.label]
     loaded = dataset.load_data(CONFIG, umap=True)
     assert np.allclose(loaded["umap"].to_numpy(), coords)
 

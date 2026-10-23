@@ -309,16 +309,21 @@ class ImageDataset:
         features stored in this dataset; see :meth:`DatasetStore.configs`."""
         return self.store.configs()
 
-    def configs_by_label(self) -> dict[str, EmbeddingConfig]:
+    def configs_by_label(
+        self, require_umap: bool = False
+    ) -> dict[str, EmbeddingConfig]:
         """Stored embedding configurations keyed by display label
-        (``model/key``), sorted by model name with default preprocessing first."""
-        return {
-            config.label: config
-            for config in sorted(
-                self.get_configs(),
-                key=lambda c: (c.model.name, c.key != "defaults", c.key),
-            )
-        }
+        (``model/key``), sorted by model name with default preprocessing first.
+        If ``require_umap``, only includes configurations with stored umap."""
+        with self.store.open("r"):
+            return {
+                config.label: config
+                for config in sorted(
+                    self.get_configs(),
+                    key=lambda c: (c.model.name, c.key != "defaults", c.key),
+                )
+                if not require_umap or self.has_umap(config)
+            }
 
     def get_image_data(self) -> pl.DataFrame:
         """Image paths, sizes, and aspect ratios; see :meth:`DatasetStore.image_data`."""
