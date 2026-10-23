@@ -132,6 +132,8 @@ class ImageDataset:
                 f"Dataset `{self.storage_path}` does not exist; "
                 "use ImageDataset.create() to create a new dataset"
             )
+        # store validates schema, version, and required groups on init;
+        # raises InvalidDatasetError (a ValueError) if not valid
         self.store = DatasetStore(self.storage_path)
 
     @property
@@ -256,15 +258,16 @@ class ImageDataset:
         # single file open shared by all store reads below
         with self.store.open("r") as store:
             f = store.file
-            # get top-level schema attributes and versions
-            schema = f.attrs.get(self.schema.attr_schema)
-            schema_version = f.attrs.get(self.schema.attr_schema_version)
+            # schema attributes are validated when the store is initialized
+            schema = f.attrs[self.schema.attr_schema]
+            schema_version = f.attrs[self.schema.attr_schema_version]
 
             img_grp = f[self.schema.image_group]
             # image data includes aspect ratio
             img_df = store.image_data()
 
             info = {
+                "schema": f"{schema} {schema_version}",
                 "image_paths": store.image_count,
                 "image_dir": str(store.image_dir),
                 # TODO: report number / % of images with mode size/aspect?
@@ -272,8 +275,6 @@ class ImageDataset:
                 "image_aspect_mode": img_df["aspect_ratio"].mode().to_list()[0],
                 "models": {},
             }
-            if schema and schema_version:
-                info["schema"] = f"{schema} {schema_version}"
 
             # stored configurations by group name, for config-based reads
             configs = {self.schema.model_group(c): c for c in store.configs()}

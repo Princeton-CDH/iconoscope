@@ -82,6 +82,11 @@ class StorageSchema:
 COMPRESSION = "gzip"
 
 
+class InvalidDatasetError(ValueError):
+    """File is not a valid iconoscope dataset (not HDF5, wrong schema or
+    version, or missing required data)."""
+
+
 def _to_python(value):
     """Convert numpy scalars (as returned for HDF5 attrs) to python types."""
     return value.item() if hasattr(value, "item") else value
@@ -114,6 +119,52 @@ class DatasetStore:
         self.path = Path(self.path)
         if not self.path.exists():
             raise FileNotFoundError(f"Dataset `{self.path}` does not exist")
+        self.validate()
+
+    def validate(self) -> None:
+        """Minimal check that the file is an iconoscope dataset this version
+        can read: an HDF5 file with the expected schema name and version, and
+        the required image group, datasets, and attributes. Does not check
+        model data. Raises :class:`InvalidDatasetError` if not valid."""
+        if not h5py.is_hdf5(self.path):
+            raise InvalidDatasetError(f"`{self.path}` is not an HDF5 file")
+        with self._h5() as f:
+            schema = _to_python(f.attrs.get(self.schema.attr_schema))
+            if schema != self.schema.schema_name:
+                raise InvalidDatasetError(
+                    f"`{self.path}` is not an {self.schema.schema_name} dataset "
+                    f"(schema: {schema})"
+                )
+            version = _to_python(f.attrs.get(self.schema.attr_schema_version))
+            if version != self.schema.version:
+                raise InvalidDatasetError(
+                    f"`{self.path}` has unsupported schema version {version}; "
+                    f"expected {self.schema.version}"
+                )
+            img_grp = f.get(self.schema.image_group)
+            if not isinstance(img_grp, h5py.Group):
+                raise InvalidDatasetError(
+                    f"`{self.path}` is missing required group "
+                    f"`{self.schema.image_group}`"
+                )
+            for ds_name in (self.schema.image_ds_paths, self.schema.image_ds_sizes):
+                if not isinstance(img_grp.get(ds_name), h5py.Dataset):
+                    raise InvalidDatasetError(
+                        f"`{self.path}` is missing required dataset "
+                        f"`{self.schema.image_group}/{ds_name}`"
+                    )
+            if self.schema.attr_image_dir not in img_grp.attrs:
+                raise InvalidDatasetError(
+                    f"`{self.path}` is missing required attribute "
+                    f"`{self.schema.attr_image_dir}` on `{self.schema.image_group}`"
+                )
+            all_models_grp = f.get(self.schema.all_models_path())
+            if all_models_grp is not None and not isinstance(
+                all_models_grp, h5py.Group
+            ):
+                raise InvalidDatasetError(
+                    f"`{self.path}`: `{self.schema.all_models_path()}` is not a group"
+                )
 
     ## file access
 
