@@ -277,6 +277,9 @@ def generate_mosaic(
     Load image feature vectors from the specified image dataset file, get or generate 2D coordinates
     via PCA+UMAP (saved in the dataset file), then assign to grid slots and create
     a mosaic image of thumbnails.
+
+    If ``sample_size`` is specified, the mosaic uses a random sample of that many
+    images; if the dataset has ``sample_size`` images or fewer, all are used.
     """
 
     if output is None:
@@ -286,8 +289,9 @@ def generate_mosaic(
     df = img_dataset.load_data(config, umap=True)
 
     # if a sample is requested, select a random sample of the specified size
-    # (subset after UMAP coords are generated, since they should be done for all images)
-    if sample_size is not None:
+    # (subset after UMAP coords are generated, since they should be done for all images);
+    # if the sample size is not smaller than the dataset, use all images
+    if sample_size is not None and sample_size < df.height:
         df = df.sample(sample_size)
 
     # use the most frequent image aspect ratio in the dataset as thumbnail aspect ratio

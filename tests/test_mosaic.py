@@ -158,3 +158,46 @@ def test_render_mosaic_missing_image(tmp_path) -> None:
         canvas = mosaic.render_mosaic([tmp_path / "missing.png"], coords, 1.0, 50, 50)
     # left blank (black)
     assert canvas.getpixel((10, 10)) == (0, 0, 0)
+
+
+@pytest.fixture
+def mock_dataset(tmp_path):
+    """Mock ImageDataset with 5 images; returns real polars data from load_data."""
+    from unittest.mock import MagicMock
+
+    import polars as pl
+
+    df = pl.DataFrame(
+        {
+            "image_path": [str(tmp_path / f"img{i}.png") for i in range(5)],
+            "umap": np.random.default_rng(0).random((5, 2), dtype=np.float32),
+            "aspect_ratio": [1.5] * 5,
+        }
+    )
+    dataset = MagicMock(storage_path=tmp_path / "data.h5")
+    dataset.load_data.return_value = df
+    return dataset
+
+
+@pytest.mark.parametrize(
+    "sample_size, expected_count",
+    [(None, 5), (3, 3), (4, 4), (5, 5), (6, 5), (1000, 5)],
+)
+def test_generate_mosaic_sample_size(
+    mock_dataset, tmp_path, sample_size, expected_count
+) -> None:
+    from unittest.mock import patch
+
+    with patch("iconoscope.mosaic.render_mosaic") as render:
+        mosaic.generate_mosaic(
+            mock_dataset,
+            config=None,
+            output=tmp_path / "out.jpg",
+            sample_size=sample_size,
+        )
+    paths, coords, *_ = render.call_args.args
+    assert len(paths) == expected_count
+    assert len(coords) == expected_count
+    all_paths = set(mock_dataset.load_data.return_value["image_path"])
+    assert set(paths) <= all_paths
+    render.return_value.save.assert_called_once_with(tmp_path / "out.jpg", quality=90)

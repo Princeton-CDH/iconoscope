@@ -144,7 +144,8 @@ def main():
         "-l",
         "--limit",
         type=positive_int,
-        help="Limit to the specified number of images (arbitrary subset, not sorted)",
+        help="Use at most the specified number of images (arbitrary subset, "
+        "not sorted); all images are used if there are fewer",
     )
 
     ## create : discover and validate images into a dataset
