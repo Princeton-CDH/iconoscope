@@ -121,6 +121,13 @@ class DatasetStore:
             finally:
                 self._file = None
 
+    @property
+    def file(self) -> h5py.File:
+        """The open file handle; only available within :meth:`open`."""
+        if self._file is None:
+            raise RuntimeError("Store is not open; use `with store.open():`")
+        return self._file
+
     @contextmanager
     def _h5(self, mode: str = "r") -> Iterator[h5py.File]:
         """Yield the open file, opening it for this call if needed."""
