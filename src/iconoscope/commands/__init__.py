@@ -11,6 +11,16 @@ from iconoscope.models import (
 )
 
 
+def load_dataset(path) -> ImageDataset:
+    """Open an existing image dataset; exit with an error message if it does
+    not exist or is not a valid iconoscope dataset."""
+    try:
+        return ImageDataset(storage_path=path)
+    except (ValueError, FileNotFoundError) as err:
+        # InvalidDatasetError is a ValueError
+        raise SystemExit(f"Error: {err}") from None
+
+
 def get_model(name: str) -> EmbeddingModel:
     """Look up an embedding model by name; exit with an error if unknown."""
     try:

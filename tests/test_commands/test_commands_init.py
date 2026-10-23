@@ -250,3 +250,33 @@ def test_cli_center_crop_100(tmp_path):
     dataset.touch()
     args = parse_cli_args(["embed", str(dataset), "--center-crop", "100"])
     assert get_embedding_config(args) == EmbeddingConfig(DEFAULT_MODEL, center_crop=1.0)
+
+
+@pytest.mark.parametrize("command", ["embed", "info", "mosaic", "cluster", "umap"])
+def test_command_invalid_dataset(command, tmp_path):
+    from importlib import import_module
+
+    # existing file that is not an iconoscope dataset
+    dataset = tmp_path / "data.h5"
+    dataset.write_text("not a dataset")
+    args = argparse.Namespace(
+        dataset=dataset,
+        model=None,
+        config=None,
+        center_crop=None,
+        grayscale=False,
+        update=False,
+    )
+    main = import_module(f"iconoscope.commands.{command}").main
+    with pytest.raises(SystemExit, match="Error: .* is not an HDF5 file"):
+        main(args)
+
+
+def test_load_dataset(tmp_image_dir, tmp_path):
+    from iconoscope.commands import load_dataset
+    from iconoscope.dataset import ImageDataset
+
+    ImageDataset.create(tmp_image_dir, tmp_path / "data.h5")
+    assert isinstance(load_dataset(tmp_path / "data.h5"), ImageDataset)
+    with pytest.raises(SystemExit, match="does not exist"):
+        load_dataset(tmp_path / "missing.h5")

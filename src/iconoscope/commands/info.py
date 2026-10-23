@@ -1,6 +1,6 @@
 import argparse
 
-from iconoscope.dataset import ImageDataset
+from iconoscope.commands import load_dataset
 
 
 def _dimensions(shape: tuple[int, int]) -> str:
@@ -8,7 +8,7 @@ def _dimensions(shape: tuple[int, int]) -> str:
 
 
 def main(args: argparse.Namespace) -> None:
-    img_dataset = ImageDataset(storage_path=args.dataset)
+    img_dataset = load_dataset(args.dataset)
     details = img_dataset.info()
     info_details = [f"Details for {args.dataset} :"]
 

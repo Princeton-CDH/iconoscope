@@ -2,12 +2,11 @@ import argparse
 from collections import Counter
 
 from iconoscope.cluster import identify_clusters
-from iconoscope.commands import resolve_config
-from iconoscope.dataset import ImageDataset
+from iconoscope.commands import load_dataset, resolve_config
 
 
 def main(args: argparse.Namespace) -> None:
-    img_dataset = ImageDataset(storage_path=args.dataset)
+    img_dataset = load_dataset(args.dataset)
     embed_config = resolve_config(img_dataset, args)
     labels = identify_clusters(img_dataset, embed_config, args.n_clusters)
     # TODO: printing the labels is not very useful... summarize clustering somehow?
