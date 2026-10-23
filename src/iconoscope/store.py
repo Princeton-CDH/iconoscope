@@ -243,3 +243,125 @@ class DatasetStore:
                     }
                     configs.append(EmbeddingConfig(model, **opts))
         return configs
+
+    def has_features(self, config: EmbeddingConfig | None = None) -> bool:
+        """Whether features are stored for a model + preprocessing
+        configuration; if no configuration is given, for any configuration."""
+        with self._h5() as f:
+            if config is None:
+                all_models_grp = f.get(self.schema.all_models_path())
+                if all_models_grp is None:
+                    return False
+                return any(
+                    self.schema.features_ds in opt_grp
+                    for model_grp in all_models_grp.values()
+                    for opt_grp in model_grp.values()
+                )
+            model_grp = f.get(self.schema.model_group(config, absolute=True))
+            return model_grp is not None and self.schema.features_ds in model_grp
+
+    def _model_dataset(self, config: EmbeddingConfig, name: str) -> h5py.Dataset:
+        """Dataset within the group for a config; file must be open.
+        Raises KeyError if not present."""
+        return self.file[self.schema.model_group(config, absolute=True)][name]
+
+    def features(self, config: EmbeddingConfig):
+        """Stored features for a configuration as a numpy array."""
+        with self.open():
+            return self._model_dataset(config, self.schema.features_ds)[:]
+
+    def umap(self, config: EmbeddingConfig):
+        """Stored umap coordinates for a configuration, or None."""
+        with self.open():
+            try:
+                return self._model_dataset(config, self.schema.umap_ds)[:]
+            except KeyError:
+                return None
+
+    def clusters(self, config: EmbeddingConfig):
+        """Stored cluster labels for a configuration, or None."""
+        with self.open():
+            try:
+                return self._model_dataset(config, self.schema.cluster_ds)[:]
+            except KeyError:
+                return None
+
+    ## writes
+
+    def prune_images(self, keep_paths: Sequence[str]) -> None:
+        """Reduce the image inventory to `keep_paths` (absolute, as returned by
+        :meth:`image_data`), in the given order. Only allowed before any
+        features are stored, since stored features are aligned to image order."""
+        with self.open("r+"):
+            if self.has_features():
+                raise ValueError(
+                    "cannot prune image paths when existing models are present"
+                )
+            keep_df = pl.DataFrame({"image_path": list(keep_paths)}).join(
+                self.image_data(), on="image_path", how="left"
+            )
+            if keep_df["image_size"].null_count():
+                raise ValueError("cannot prune to paths not in the dataset")
+            rel_paths = [
+                str(Path(p).relative_to(self.image_dir)) for p in keep_df["image_path"]
+            ]
+            self._write_image_group(
+                self.file, self.image_dir, rel_paths, keep_df["image_size"].to_list()
+            )
+        # image count changed; clear cached value
+        self.__dict__.pop("image_count", None)
+
+    def write_features(
+        self, config: EmbeddingConfig, features, overwrite: bool = False
+    ) -> None:
+        """Store features for a configuration, along with config attributes so
+        it can be reconstructed. Features must be 2-dimensional with one row
+        per image, in stored image order. If features for the configuration
+        exist, raises ValueError unless `overwrite`, in which case the whole
+        model group is replaced (removing derived umap/cluster data)."""
+        if features.ndim != 2:
+            raise ValueError("features must be 2-dimensional")
+        with self.open("r+"):
+            if features.shape[0] != self.image_count:
+                raise ValueError(
+                    f"features have {features.shape[0]} rows; "
+                    f"dataset has {self.image_count} images"
+                )
+            all_models_grp = self.file.require_group(self.schema.all_models_path())
+            group_name = self.schema.model_group(config)
+            if group_name in all_models_grp:
+                if not overwrite:
+                    raise ValueError(
+                        f"Features for '{group_name}' are already present "
+                        "and overwrite not requested."
+                    )
+                del all_models_grp[group_name]
+            model_grp = all_models_grp.create_group(group_name)
+            model_grp.attrs[self.schema.attr_model] = config.model.name
+            model_grp.attrs[self.schema.attr_model_id] = config.model.id
+            for opt, value in config.opts.items():
+                # HDF5 attrs can't store None; omit unset options
+                if value is not None:
+                    model_grp.attrs[opt] = value
+            self._write_dataset(model_grp, self.schema.features_ds, features)
+
+    def _feature_group(self, config: EmbeddingConfig) -> h5py.Group:
+        """Model group for a config, which must have features; file must be open."""
+        if not self.has_features(config):
+            raise ValueError(f"No features stored for '{config.label}'")
+        return self.file[self.schema.model_group(config, absolute=True)]
+
+    def write_umap(self, config: EmbeddingConfig, coords) -> None:
+        """Store (or replace) umap coordinates for a configuration."""
+        with self.open("r+"):
+            self._write_dataset(
+                self._feature_group(config), self.schema.umap_ds, coords
+            )
+
+    def write_clusters(self, config: EmbeddingConfig, labels, n_clusters: int) -> None:
+        """Store (or replace) cluster labels for a configuration."""
+        with self.open("r+"):
+            ds = self._write_dataset(
+                self._feature_group(config), self.schema.cluster_ds, labels
+            )
+            ds.attrs[self.schema.attr_n_clusters] = n_clusters

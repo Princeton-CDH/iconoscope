@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import h5py
+import numpy as np
 import pytest
 
 from iconoscope.models import DEFAULT_MODEL, EmbeddingConfig
@@ -104,6 +105,75 @@ def test_configs(store: DatasetStore):
     configs = store.configs()
     assert configs == [custom]
     assert isinstance(configs[0].grayscale, bool)
+
+
+CONFIG = EmbeddingConfig(DEFAULT_MODEL)
+FEATURES = np.array([[1.0, 0.0], [0.0, 1.0]])
+
+
+def test_write_and_read_features(store: DatasetStore):
+    assert not store.has_features()
+    assert not store.has_features(CONFIG)
+    store.write_features(CONFIG, FEATURES)
+    assert store.has_features()
+    assert store.has_features(CONFIG)
+    assert store.configs() == [CONFIG]
+    assert store.features(CONFIG).tolist() == FEATURES.tolist()
+    assert store.umap(CONFIG) is None
+    assert store.clusters(CONFIG) is None
+
+
+def test_write_features_validation(store: DatasetStore):
+    with pytest.raises(ValueError, match="2-dimensional"):
+        store.write_features(CONFIG, np.array([1.0, 2.0]))
+    with pytest.raises(ValueError, match="dataset has 2 images"):
+        store.write_features(CONFIG, FEATURES[:1])
+    store.write_features(CONFIG, FEATURES)
+    with pytest.raises(ValueError, match="already present"):
+        store.write_features(CONFIG, FEATURES)
+
+
+def test_write_features_overwrite_removes_derived(store: DatasetStore):
+    store.write_features(CONFIG, FEATURES)
+    store.write_umap(CONFIG, np.array([[0.1, 0.2], [0.3, 0.4]]))
+    store.write_clusters(CONFIG, np.array([0, 1]), 2)
+    store.write_features(CONFIG, FEATURES * 2, overwrite=True)
+    assert store.features(CONFIG).tolist() == (FEATURES * 2).tolist()
+    assert store.umap(CONFIG) is None
+    assert store.clusters(CONFIG) is None
+
+
+def test_write_umap_and_clusters(store: DatasetStore):
+    with pytest.raises(ValueError, match="No features"):
+        store.write_umap(CONFIG, np.zeros((2, 2)))
+    with pytest.raises(ValueError, match="No features"):
+        store.write_clusters(CONFIG, np.array([0, 1]), 2)
+    store.write_features(CONFIG, FEATURES)
+    store.write_umap(CONFIG, np.array([[0.1, 0.2], [0.3, 0.4]]))
+    store.write_clusters(CONFIG, np.array([0, 1]), 2)
+    # replacing existing results is allowed
+    store.write_clusters(CONFIG, np.array([1, 1]), 1)
+    assert store.umap(CONFIG).tolist() == [[0.1, 0.2], [0.3, 0.4]]
+    assert store.clusters(CONFIG).tolist() == [1, 1]
+    with h5py.File(store.path, "r") as f:
+        cluster_ds = f[StorageSchema.model_group(CONFIG, absolute=True)]["cluster"]
+        assert cluster_ds.attrs["n_clusters"] == 1
+
+
+def test_prune_images(tmp_path: Path, store: DatasetStore):
+    keep = str(tmp_path / "images" / "sub/b.png")
+    assert store.image_count == 2
+    with pytest.raises(ValueError, match="not in the dataset"):
+        store.prune_images([keep, "/elsewhere/c.jpg"])
+    store.prune_images([keep])
+    # cached count is cleared
+    assert store.image_count == 1
+    df = store.image_data()
+    assert df["image_path"].to_list() == [keep]
+    assert df["image_size"].to_list() == [[10, 20]]
+    store.write_features(CONFIG, FEATURES[:1])
+    with pytest.raises(ValueError, match="existing models are present"):
+        store.prune_images([])
 
 
 def test_repr_and_equality(store: DatasetStore):

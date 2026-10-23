@@ -210,16 +210,12 @@ class ImageDataset(IterableDataset):
         if features.ndim != 2:
             raise ValueError("features must be 2-dimensional")
 
-        # open read/write so we can update without overwriting
+        # single read/write open for validation, any pruning, and the write
         with self.store.open("r+") as store:
-            f = store.file
-            # image group is created by create()
-            img_grp = f[self.schema.image_group]
-
             # Image paths are shared across models and must match feature vectors.
             # Check that saved images match the current set before making any updates.
             # TODO: replace pruning with aligning df to stored path order
-            img_df = self.get_image_data()
+            img_df = store.image_data()
             # error if any image paths are in the incoming df but not in the stored image paths
             unknown_img_df = df.join(img_df, on="image_path", how="anti")
             if unknown_img_df.height:
@@ -227,87 +223,17 @@ class ImageDataset(IterableDataset):
                     "image paths do not match the existing dataset "
                     f"({unknown_img_df.height} unknown paths)"
                 )
-            # check if total does not match
+            # if fewer images than stored (e.g. some failed to load), prune
+            # the inventory; only allowed before any features are saved
             if img_df.height != df.height:
-                # if any features have already been saved, error
-                if len(img_grp.get(self.schema.all_models_group, [])):
-                    raise ValueError(
-                        "cannot prune image paths when existing models are present"
-                    )
-                # otherwise, prune invalid image paths and their corresponding sizes;
-                # use stored sizes, not any image_size column on the incoming df
-                img_subset_df = df.select("image_path").join(
-                    img_df, on="image_path", how="left"
-                )
-                # store paths relative to image dir
-                base = Path(img_grp.attrs["image_dir"])
-                subset_paths = [
-                    str(Path(p).relative_to(base)) for p in img_subset_df["image_path"]
-                ]
-                # can't resize, so delete and recreate
-                del img_grp[self.schema.image_ds_paths]
-                del img_grp[self.schema.image_ds_sizes]
-                img_grp.create_dataset(
-                    self.schema.image_ds_paths, data=subset_paths, compression="gzip"
-                )
-                img_grp.create_dataset(
-                    self.schema.image_ds_sizes,
-                    data=img_subset_df["image_size"].to_list(),
-                    compression="gzip",
-                )
-                # image count changed; clear the store's cached value
-                store.__dict__.pop("image_count", None)
+                store.prune_images(df["image_path"].to_list())
 
-            # Features for a model already saved to this file are an error
-            # unless overwrite is requested.
-            all_models_grp = img_grp.require_group(self.schema.all_models_group)
-            # determine group name for current model with current options
-            model_group_name = self.schema.model_group(config)
-            if model_group_name in all_models_grp:
-                if not overwrite:
-                    raise ValueError(
-                        f"Features for '{model_group_name}' are already present and overwrite not requested."
-                    )
-                # delete the whole model group, since any downstream results
-                # (umap/cluster) will be invalid for the new features
-                del all_models_grp[model_group_name]
-
-            # create the new model group only after validation
-            model_grp = all_models_grp.create_group(model_group_name)
-            # store model + preprocessing options so config can be reconstructed
-            model_grp.attrs[self.schema.attr_model] = config.model.name
-            model_grp.attrs[self.schema.attr_model_id] = config.model.id
-            for opt, value in config.opts.items():
-                # HDF5 attrs can't store None; omit unset options
-                if value is not None:
-                    model_grp.attrs[opt] = value
-            # save extracted features as a dataset
-            model_grp.create_dataset(
-                self.schema.features_ds, data=features, compression="gzip"
-            )
+            store.write_features(config, features, overwrite=overwrite)
 
     def has_features(self, config: EmbeddingConfig | None = None) -> bool:
         """Check if features are stored for the specified model + preprocessing
         configuration; if no configuration is specified, check for any features."""
-        if not self.storage_path.exists():
-            return False
-        with self.store.open("r") as store:
-            f = store.file
-            if config is not None:
-                model_group_name = self.schema.model_group(config, absolute=True)
-                return (
-                    model_group_name in f
-                    and self.schema.features_ds in f[model_group_name]
-                )
-            all_models_grp = f.get(self.schema.all_models_path())
-            if all_models_grp is None:
-                return False
-            # check for features stored under any model/options group
-            return any(
-                self.schema.features_ds in opt_grp
-                for model_grp in all_models_grp.values()
-                for opt_grp in model_grp.values()
-            )
+        return self.store.has_features(config)
 
     def save_clusters(
         self,
@@ -315,17 +241,8 @@ class ImageDataset(IterableDataset):
         n_clusters: int,
         config: EmbeddingConfig,
     ) -> None:
-        # save cluster labels generated by clustering features from a specific model
-        with self.store.open("r+") as store:
-            f = store.file
-            model_group_name = self.schema.model_group(config, absolute=True)
-            model_grp = f[model_group_name]
-            # create new dataset and save labels
-            cluster_ds = model_grp.create_dataset(
-                self.schema.cluster_ds, data=labels, compression="gzip"
-            )
-            # save the number of clusters in an attribute
-            cluster_ds.attrs["n_clusters"] = n_clusters
+        """Save cluster labels generated by clustering features for a configuration."""
+        self.store.write_clusters(config, labels, n_clusters)
 
     def info(self) -> dict:
         # single file open shared by all store reads below
@@ -411,10 +328,8 @@ class ImageDataset(IterableDataset):
         # if umap is requested, open in read/write mode in case we need to save
         read_mode = "r+" if umap else "r"
         with self.store.open(read_mode) as store:
-            f = store.file
             # image paths, sizes, and aspect ratio from the store
-            img_df = self.store.image_data() if paths else None
-            # if umap is requested but has not yet been generated, calculate and save
+            img_df = store.image_data() if paths else None
             data = {}
 
             if features or umap:
@@ -424,40 +339,31 @@ class ImageDataset(IterableDataset):
                         "model configuration is required to load features or umap"
                     )
 
-                model_grp = f[self.schema.model_group(config, absolute=True)]
-
-                features_dataset = None
+                feature_data = None
                 if umap:
-                    # umap is requested
-                    if self.schema.umap_ds not in model_grp:
+                    umap_coords = store.umap(config)
+                    # if umap has not yet been generated, calculate and save
+                    if umap_coords is None:
                         print("** umap not present, calculating")
-                        # load feature dataset
-                        features_dataset = model_grp[self.schema.features_ds]
-                        umap_coords = reduce_features(features_dataset)
-                        # save as dataset for reuse
+                        feature_data = store.features(config)
+                        umap_coords = reduce_features(feature_data)
                         print("saving umap coords")
-                        model_grp.create_dataset(
-                            self.schema.umap_ds, data=umap_coords, compression="gzip"
-                        )
-
+                        store.write_umap(config, umap_coords)
                     else:
                         print("*** loading saved umap coords")
-                        umap_coords = model_grp[self.schema.umap_ds][:]
-
-                    # add to data dictionary to include in returned dataframe
                     data["umap"] = umap_coords
 
                 if features:
-                    # load feature dataset if not already loaded for umap
-                    if features_dataset is None:
-                        features_dataset = model_grp[self.schema.features_ds]
-                    # [:] = retrieve all scalar data
-                    data["features"] = features_dataset[:]
+                    # load features if not already loaded for umap
+                    if feature_data is None:
+                        feature_data = store.features(config)
+                    data["features"] = feature_data
 
                 # include cluster labels when requested and present in the data
-                if clusters and self.schema.cluster_ds in model_grp:
-                    cluster_dataset = model_grp[self.schema.cluster_ds]
-                    data["cluster"] = cluster_dataset[:]
+                if clusters:
+                    labels = store.clusters(config)
+                    if labels is not None:
+                        data["cluster"] = labels
 
                 # TODO: update to support cluster results for multiple k
                 # maybe cluster/kmeans_{k} so they can be managed individually
