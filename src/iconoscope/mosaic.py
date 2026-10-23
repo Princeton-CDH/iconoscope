@@ -109,6 +109,7 @@ def assign_to_grid(
         return assignments
 
 
+#: minimum mosaic cell size in pixels (applies to the shorter side of the cell)
 MIN_THUMB_SIZE = 20
 MAX_THUMB_SIZE = 350
 
@@ -209,15 +210,169 @@ class MosaicLayout(NamedTuple):
         return self.grid.rows * self.cell_height
 
 
+def cell_size(
+    image_count: int, canvas_width: int, canvas_height: int, aspect_ratio: float
+) -> tuple[GridLayout, int, int]:
+    """Choose the grid for the canvas via :func:`best_grid` and return it with
+    the (integer pixel) cell width and height that stretch the grid to fill
+    the canvas."""
+    grid = best_grid(image_count, canvas_width, canvas_height, aspect_ratio)
+    return grid, round(canvas_width / grid.cols), round(canvas_height / grid.rows)
+
+
+def fits_canvas(
+    image_count: int,
+    canvas_width: int,
+    canvas_height: int,
+    aspect_ratio: float,
+    min_cell_size: int = MIN_THUMB_SIZE,
+) -> bool:
+    """Check whether the specified number of images can be laid out on the
+    canvas with cells at least ``min_cell_size`` pixels on each side."""
+    _, cell_width, cell_height = cell_size(
+        image_count, canvas_width, canvas_height, aspect_ratio
+    )
+    return min(cell_width, cell_height) >= min_cell_size
+
+
+def max_images_for_canvas(
+    canvas_width: int,
+    canvas_height: int,
+    aspect_ratio: float,
+    upper_bound: int,
+    min_cell_size: int = MIN_THUMB_SIZE,
+) -> int:
+    """Return a number of images (up to ``upper_bound``) that fits on the
+    canvas at the minimum cell size; returns 0 if not even one image fits.
+
+    Fit is not strictly monotonic in image count (rounding and grid choice can
+    make a slightly smaller count produce slightly smaller cells), so the result
+    is guaranteed to fit and is close to the maximum, but not necessarily the
+    maximum, and some smaller counts may not fit."""
+    if not fits_canvas(1, canvas_width, canvas_height, aspect_ratio, min_cell_size):
+        return 0
+    # binary search; invariant: lo always fits
+    lo, hi = 1, upper_bound
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fits_canvas(mid, canvas_width, canvas_height, aspect_ratio, min_cell_size):
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
+def min_canvas_for_images(
+    image_count: int,
+    canvas_width: int,
+    canvas_height: int,
+    aspect_ratio: float,
+    min_cell_size: int = MIN_THUMB_SIZE,
+) -> tuple[int, int]:
+    """Return a canvas size (width, height), with the same proportions as the
+    requested canvas, that fits ``image_count`` images at the minimum cell size.
+
+    As with :func:`max_images_for_canvas`, the result is guaranteed to fit and
+    is close to the smallest such size, but not necessarily the smallest."""
+    proportion = canvas_height / canvas_width
+
+    def scaled(width: int) -> tuple[int, int]:
+        return width, max(1, round(width * proportion))
+
+    # find an upper bound by doubling; then binary search; invariant: hi always fits
+    lo, hi = 1, max(canvas_width, 1)
+    while not fits_canvas(image_count, *scaled(hi), aspect_ratio, min_cell_size):
+        lo, hi = hi, hi * 2
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if fits_canvas(image_count, *scaled(mid), aspect_ratio, min_cell_size):
+            hi = mid
+        else:
+            lo = mid + 1
+    return scaled(hi)
+
+
+class CanvasTooSmallError(ValueError):
+    """Raised when the requested canvas cannot hold the images at the minimum
+    cell size. Attributes provide the limits needed to suggest a fix."""
+
+    def __init__(
+        self,
+        image_count: int,
+        canvas_width: int,
+        canvas_height: int,
+        cell_width: int,
+        cell_height: int,
+        max_images: int,
+        min_canvas: tuple[int, int],
+        min_cell_size: int = MIN_THUMB_SIZE,
+    ):
+        self.image_count = image_count
+        self.canvas_width = canvas_width
+        self.canvas_height = canvas_height
+        self.cell_width = cell_width
+        self.cell_height = cell_height
+        #: largest number of images that fit on the requested canvas
+        self.max_images = max_images
+        #: smallest canvas (width, height) that fits all the images
+        self.min_canvas = min_canvas
+        self.min_cell_size = min_cell_size
+        super().__init__(
+            f"Canvas {canvas_width}x{canvas_height} is too small for "
+            f"{image_count:,} images: cells would be {cell_width}x{cell_height} "
+            f"pixels (minimum is {min_cell_size})"
+        )
+
+
+def check_canvas_size(
+    image_count: int,
+    canvas_width: int,
+    canvas_height: int,
+    aspect_ratio: float,
+    min_cell_size: int = MIN_THUMB_SIZE,
+) -> None:
+    """Raise :class:`CanvasTooSmallError` if the images cannot be laid out on the
+    canvas with cells at least ``min_cell_size`` pixels on each side."""
+    _, cell_width, cell_height = cell_size(
+        image_count, canvas_width, canvas_height, aspect_ratio
+    )
+    if min(cell_width, cell_height) >= min_cell_size:
+        return
+    raise CanvasTooSmallError(
+        image_count,
+        canvas_width,
+        canvas_height,
+        cell_width,
+        cell_height,
+        max_images=max_images_for_canvas(
+            canvas_width, canvas_height, aspect_ratio, image_count, min_cell_size
+        ),
+        min_canvas=min_canvas_for_images(
+            image_count, canvas_width, canvas_height, aspect_ratio, min_cell_size
+        ),
+        min_cell_size=min_cell_size,
+    )
+
+
 def layout_mosaic(
-    coords: np.ndarray, canvas_width: int, canvas_height: int, aspect_ratio: float
+    coords: np.ndarray,
+    canvas_width: int,
+    canvas_height: int,
+    aspect_ratio: float,
+    min_cell_size: int = MIN_THUMB_SIZE,
 ) -> MosaicLayout:
     """Determine grid size and cell size for the canvas and image aspect ratio,
-    and assign each 2D coordinate (normalized 0-1) to a grid cell."""
-    grid = best_grid(len(coords), canvas_width, canvas_height, aspect_ratio)
+    and assign each 2D coordinate (normalized 0-1) to a grid cell.
+
+    Raises :class:`CanvasTooSmallError` if cells would be smaller than
+    ``min_cell_size`` pixels on either side."""
+    check_canvas_size(
+        len(coords), canvas_width, canvas_height, aspect_ratio, min_cell_size
+    )
     # determine thumbnail size that will fill the canvas
-    cell_width = round(canvas_width / grid.cols)
-    cell_height = round(canvas_height / grid.rows)
+    grid, cell_width, cell_height = cell_size(
+        len(coords), canvas_width, canvas_height, aspect_ratio
+    )
     assignments = assign_to_grid(coords, grid.cols, grid.rows)
     return MosaicLayout(grid, cell_width, cell_height, assignments)
 

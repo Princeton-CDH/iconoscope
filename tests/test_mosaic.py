@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 
@@ -186,8 +188,6 @@ def mock_dataset(tmp_path):
 def test_generate_mosaic_sample_size(
     mock_dataset, tmp_path, sample_size, expected_count
 ) -> None:
-    from unittest.mock import patch
-
     with patch("iconoscope.mosaic.render_mosaic") as render:
         mosaic.generate_mosaic(
             mock_dataset,
@@ -201,3 +201,138 @@ def test_generate_mosaic_sample_size(
     all_paths = set(mock_dataset.load_data.return_value["image_path"])
     assert set(paths) <= all_paths
     render.return_value.save.assert_called_once_with(tmp_path / "out.jpg", quality=90)
+
+
+## minimum cell size
+
+
+@pytest.mark.parametrize(
+    "image_count, canvas_width, canvas_height, aspect_ratio, expected",
+    [
+        (100, 1000, 1000, 1.0, True),  # 100px cells
+        (2500, 1000, 1000, 1.0, True),  # 20px cells: exactly the minimum
+        (2601, 1000, 1000, 1.0, True),  # 51 cols: 19.6px cells, rounded to 20
+        (2705, 1000, 1000, 1.0, False),  # 52 cols: 19px cells
+        (5000, 2000, 2000, 1.5, True),
+        (50000, 2000, 2000, 1.5, False),  # 11x7 cells
+        (50000, 100, 100, 1.0, False),  # 0x0 cells
+        (1, 19, 100, 1.0, False),  # canvas narrower than one cell
+    ],
+)
+def test_fits_canvas(
+    image_count, canvas_width, canvas_height, aspect_ratio, expected
+) -> None:
+    assert (
+        mosaic.fits_canvas(image_count, canvas_width, canvas_height, aspect_ratio)
+        is expected
+    )
+
+
+def test_fits_canvas_min_cell_size() -> None:
+    # 100px cells
+    assert mosaic.fits_canvas(100, 1000, 1000, 1.0, min_cell_size=100)
+    assert not mosaic.fits_canvas(100, 1000, 1000, 1.0, min_cell_size=101)
+
+
+@pytest.mark.parametrize(
+    "canvas_width, canvas_height, aspect_ratio",
+    [(1000, 1000, 1.0), (2000, 2000, 1.5), (2000, 500, 0.75), (100, 100, 1.0)],
+)
+def test_max_images_for_canvas(canvas_width, canvas_height, aspect_ratio) -> None:
+    upper_bound = 100_000
+    max_images = mosaic.max_images_for_canvas(
+        canvas_width, canvas_height, aspect_ratio, upper_bound
+    )
+    assert 0 < max_images < upper_bound
+    # result fits
+    assert mosaic.fits_canvas(max_images, canvas_width, canvas_height, aspect_ratio)
+    # close to the true maximum (fit is not strictly monotonic; see docstring)
+    true_max = max(
+        n
+        for n in range(1, max_images * 2)
+        if mosaic.fits_canvas(n, canvas_width, canvas_height, aspect_ratio)
+    )
+    assert max_images >= true_max * 0.9
+
+
+def test_max_images_for_canvas_bounds() -> None:
+    # never more than the upper bound
+    assert mosaic.max_images_for_canvas(2000, 2000, 1.0, 50) == 50
+    # zero if not even one image fits
+    assert mosaic.max_images_for_canvas(19, 19, 1.0, 50) == 0
+
+
+@pytest.mark.parametrize(
+    "image_count, canvas_width, canvas_height, aspect_ratio",
+    [
+        (50000, 2000, 2000, 1.5),
+        (5000, 100, 100, 1.0),
+        (20000, 2000, 200, 1.0),
+        (10, 2000, 2000, 1.0),  # already fits
+    ],
+)
+def test_min_canvas_for_images(
+    image_count, canvas_width, canvas_height, aspect_ratio
+) -> None:
+    width, height = mosaic.min_canvas_for_images(
+        image_count, canvas_width, canvas_height, aspect_ratio
+    )
+    assert mosaic.fits_canvas(image_count, width, height, aspect_ratio)
+    # preserves the proportions of the requested canvas
+    assert height / width == pytest.approx(canvas_height / canvas_width, rel=0.01)
+    # near the smallest: a canvas 2% smaller does not fit
+    smaller = (round(width * 0.98), round(height * 0.98))
+    assert not mosaic.fits_canvas(image_count, *smaller, aspect_ratio)
+
+
+def test_check_canvas_size_ok() -> None:
+    # no exception
+    mosaic.check_canvas_size(100, 1000, 1000, 1.0)
+
+
+def test_check_canvas_size_too_small() -> None:
+    with pytest.raises(mosaic.CanvasTooSmallError) as excinfo:
+        mosaic.check_canvas_size(50000, 2000, 2000, 1.5)
+    err = excinfo.value
+    assert isinstance(err, ValueError)
+    assert "Canvas 2000x2000 is too small for 50,000 images" in str(err)
+    assert "cells would be 11x7 pixels (minimum is 20)" in str(err)
+    assert (err.cell_width, err.cell_height) == (11, 7)
+    assert err.image_count == 50000
+    # suggested fixes actually fit
+    assert mosaic.fits_canvas(err.max_images, 2000, 2000, 1.5)
+    assert mosaic.fits_canvas(50000, *err.min_canvas, 1.5)
+
+
+def test_check_canvas_size_zero_cells() -> None:
+    with pytest.raises(mosaic.CanvasTooSmallError, match="cells would be 0x0"):
+        mosaic.check_canvas_size(50000, 100, 100, 1.0)
+
+
+def test_check_canvas_size_no_images_fit() -> None:
+    with pytest.raises(mosaic.CanvasTooSmallError) as excinfo:
+        mosaic.check_canvas_size(10, 19, 19, 1.0)
+    assert excinfo.value.max_images == 0
+
+
+def test_layout_mosaic_too_small() -> None:
+    coords = np.random.default_rng(0).random((5000, 2)).astype(np.float32)
+    with (
+        patch("iconoscope.mosaic.assign_to_grid") as assign,
+        pytest.raises(mosaic.CanvasTooSmallError),
+    ):
+        mosaic.layout_mosaic(coords, 100, 100, 1.0)
+    # fails before assigning images to the grid
+    assign.assert_not_called()
+
+
+def test_generate_mosaic_too_small(mock_dataset, tmp_path) -> None:
+    with (
+        patch("iconoscope.mosaic.load_thumbnail") as load_thumbnail,
+        pytest.raises(mosaic.CanvasTooSmallError),
+    ):
+        mosaic.generate_mosaic(
+            mock_dataset, config=None, output=tmp_path / "out.jpg", width=30, height=30
+        )
+    # fails before loading any images
+    load_thumbnail.assert_not_called()
