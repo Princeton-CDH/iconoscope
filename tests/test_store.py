@@ -41,8 +41,8 @@ def test_create_validation(tmp_path: Path, store: DatasetStore):
 
 
 def test_image_reads(tmp_path: Path, store: DatasetStore):
-    assert store.image_dir() == tmp_path / "images"
-    assert store.image_count() == 2
+    assert store.image_dir == tmp_path / "images"
+    assert store.image_count == 2
     df = store.image_data()
     assert df.columns == ["image_path", "image_size", "aspect_ratio"]
     assert df["image_path"].to_list() == [str(tmp_path / "images" / p) for p in PATHS]
@@ -56,7 +56,7 @@ def test_open_reuses_file(store: DatasetStore):
         h5_file = store._file
         assert h5_file is not None
         # nested calls reuse the open file
-        store.image_count()
+        store.image_data()
         with store.open():
             assert store._file is h5_file
     assert store._file is None

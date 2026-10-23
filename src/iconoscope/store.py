@@ -8,6 +8,7 @@ and explored without them.
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import ClassVar, Self
 
@@ -177,11 +178,15 @@ class DatasetStore:
 
     ## reads
 
+    # image group is only written on creation, so these are safe to cache
+
+    @cached_property
     def image_dir(self) -> Path:
         """Absolute base directory for the images in this dataset."""
         with self._h5() as f:
             return Path(f[self.schema.image_group].attrs[self.schema.attr_image_dir])
 
+    @cached_property
     def image_count(self) -> int:
         """Number of images in the dataset."""
         with self._h5() as f:
