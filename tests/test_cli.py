@@ -85,10 +85,138 @@ def test_create_reports_image_total(tmp_path: Path, capsys):
         dataset = create.return_value
         dataset.info.return_value = {"image_paths": 12}
         create_command.main(
-            argparse.Namespace(image_dir=tmp_path, output_path=out, max=None)
+            argparse.Namespace(image_dir=tmp_path, output_path=out, limit=None)
         )
 
     assert "12" in capsys.readouterr().out
+
+
+def test_create_passes_limit(tmp_path: Path):
+    out = tmp_path / "data.h5"
+    from iconoscope.commands import create as create_command
+
+    with patch("iconoscope.commands.create.ImageDataset.create") as create:
+        create.return_value.info.return_value = {"image_paths": 5}
+        create_command.main(
+            argparse.Namespace(image_dir=tmp_path, output_path=out, limit=5)
+        )
+    create.assert_called_once_with(tmp_path, out, max_images=5)
+
+
+def run_cli(argv: list[str], command: str) -> argparse.Namespace:
+    """Run the cli with a mock handler; return the parsed args."""
+    handler = MagicMock()
+    command_module = ModuleType(f"iconoscope.commands.{command}")
+    command_module.main = handler
+    with (
+        patch("iconoscope.cli.import_module", return_value=command_module),
+        patch("sys.argv", ["iconoscope", *argv]),
+    ):
+        cli.main()
+    return handler.call_args.args[0]
+
+
+@pytest.mark.parametrize("flag", ["-l", "--limit"])
+def test_create_limit(tmp_path: Path, flag):
+    out = tmp_path / "data.h5"
+    args = run_cli(["create", str(tmp_path), str(out), flag, "10"], "create")
+    assert args.limit == 10
+
+
+def test_create_limit_default(tmp_path: Path):
+    args = run_cli(["create", str(tmp_path), str(tmp_path / "d.h5")], "create")
+    assert args.limit is None
+
+
+@pytest.mark.parametrize("flag", ["-l", "--limit"])
+def test_mosaic_limit(tmp_path: Path, flag):
+    args = run_cli(["mosaic", str(tmp_path / "d.h5"), flag, "25"], "mosaic")
+    assert args.limit == 25
+
+
+def test_mosaic_limit_default(tmp_path: Path):
+    assert run_cli(["mosaic", str(tmp_path / "d.h5")], "mosaic").limit is None
+
+
+@pytest.mark.parametrize("value", ["0", "-3", "abc", "2.5"])
+def test_limit_invalid(tmp_path: Path, value, capsys):
+    with (
+        patch("iconoscope.cli.import_module") as importer,
+        patch(
+            "sys.argv", ["iconoscope", "mosaic", str(tmp_path / "d.h5"), "-l", value]
+        ),
+        pytest.raises(SystemExit),
+    ):
+        cli.main()
+    importer.assert_not_called()
+    assert "--limit" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["embed", "mosaic", "cluster"])
+def test_model_short_flag(tmp_path: Path, command):
+    dataset = tmp_path / "d.h5"
+    dataset.touch()
+    argv = [command, str(dataset), "-m", "clip"]
+    if command == "cluster":
+        argv.append("3")
+    assert run_cli(argv, command).model == "clip"
+
+
+def test_create_old_max_flag_rejected(tmp_path: Path):
+    # --max was replaced by --limit; -m is no longer valid for create
+    with (
+        patch("iconoscope.cli.import_module") as importer,
+        patch(
+            "sys.argv",
+            [
+                "iconoscope",
+                "create",
+                str(tmp_path),
+                str(tmp_path / "d.h5"),
+                "--max",
+                "5",
+            ],
+        ),
+        pytest.raises(SystemExit),
+    ):
+        cli.main()
+    importer.assert_not_called()
+
+
+def test_cluster_n_clusters(tmp_path: Path):
+    args = run_cli(["cluster", str(tmp_path / "d.h5"), "4"], "cluster")
+    assert args.n_clusters == 4
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "x"])
+def test_cluster_n_clusters_invalid(tmp_path: Path, value):
+    with (
+        patch("iconoscope.cli.import_module") as importer,
+        patch("sys.argv", ["iconoscope", "cluster", str(tmp_path / "d.h5"), value]),
+        pytest.raises(SystemExit),
+    ):
+        cli.main()
+    importer.assert_not_called()
+
+
+@pytest.mark.parametrize("value, expected", [("1", 1), ("42", 42)])
+def test_positive_int(value, expected):
+    assert cli.positive_int(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value, message",
+    [
+        ("0", "must be a positive integer"),
+        ("-5", "must be a positive integer"),
+        ("abc", "Could not convert"),
+        ("1.5", "Could not convert"),
+        ("", "Could not convert"),
+    ],
+)
+def test_positive_int_invalid(value, message):
+    with pytest.raises(argparse.ArgumentTypeError, match=message):
+        cli.positive_int(value)
 
 
 def test_cli_lazy_load():

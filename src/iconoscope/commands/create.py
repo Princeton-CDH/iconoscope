@@ -9,7 +9,7 @@ def main(args: argparse.Namespace) -> None:
         dataset = ImageDataset.create(
             args.image_dir,
             args.output_path,
-            max_images=args.max,
+            max_images=args.limit,
         )
         total = dataset.info()["image_paths"]
         print(f"Created {args.output_path} with {total:,} images.")
