@@ -111,10 +111,14 @@ CONFIG = EmbeddingConfig(DEFAULT_MODEL)
 FEATURES = np.array([[1.0, 0.0], [0.0, 1.0]])
 
 
+def image_paths(store: DatasetStore) -> list[str]:
+    return [str(p) for p in store.image_paths()]
+
+
 def test_write_and_read_features(store: DatasetStore):
     assert not store.has_features()
     assert not store.has_features(CONFIG)
-    store.write_features(CONFIG, FEATURES)
+    store.write_features(CONFIG, FEATURES, image_paths(store))
     assert store.has_features()
     assert store.has_features(CONFIG)
     assert store.configs() == [CONFIG]
@@ -125,19 +129,32 @@ def test_write_and_read_features(store: DatasetStore):
 
 def test_write_features_validation(store: DatasetStore):
     with pytest.raises(ValueError, match="2-dimensional"):
-        store.write_features(CONFIG, np.array([1.0, 2.0]))
+        store.write_features(CONFIG, np.array([1.0, 2.0]), image_paths(store))
     with pytest.raises(ValueError, match="dataset has 2 images"):
-        store.write_features(CONFIG, FEATURES[:1])
-    store.write_features(CONFIG, FEATURES)
+        store.write_features(CONFIG, FEATURES[:1], image_paths(store)[:1])
+    store.write_features(CONFIG, FEATURES, image_paths(store))
     with pytest.raises(ValueError, match="already present"):
-        store.write_features(CONFIG, FEATURES)
+        store.write_features(CONFIG, FEATURES, image_paths(store))
+
+
+def test_write_features_path_validation(store: DatasetStore):
+    paths = image_paths(store)
+    with pytest.raises(ValueError, match="got 1 image paths"):
+        store.write_features(CONFIG, FEATURES, paths[:1])
+    with pytest.raises(ValueError, match="stored dataset order"):
+        store.write_features(CONFIG, FEATURES, paths[::-1])
+    with pytest.raises(ValueError, match="must be unique"):
+        store.write_features(CONFIG, FEATURES, [paths[0], paths[0]])
+    with pytest.raises(ValueError, match="not in the dataset"):
+        store.write_features(CONFIG, FEATURES, [paths[0], "/elsewhere/c.jpg"])
+    assert not store.has_features()
 
 
 def test_write_features_overwrite_removes_derived(store: DatasetStore):
-    store.write_features(CONFIG, FEATURES)
+    store.write_features(CONFIG, FEATURES, image_paths(store))
     store.write_umap(CONFIG, np.array([[0.1, 0.2], [0.3, 0.4]]))
     store.write_clusters(CONFIG, np.array([0, 1]), 2)
-    store.write_features(CONFIG, FEATURES * 2, overwrite=True)
+    store.write_features(CONFIG, FEATURES * 2, image_paths(store), overwrite=True)
     assert store.features(CONFIG).tolist() == (FEATURES * 2).tolist()
     assert store.umap(CONFIG) is None
     assert store.clusters(CONFIG) == {}
@@ -148,7 +165,7 @@ def test_write_umap_and_clusters(store: DatasetStore):
         store.write_umap(CONFIG, np.zeros((2, 2)))
     with pytest.raises(ValueError, match="No features"):
         store.write_clusters(CONFIG, np.array([0, 1]), 2)
-    store.write_features(CONFIG, FEATURES)
+    store.write_features(CONFIG, FEATURES, image_paths(store))
     store.write_umap(CONFIG, np.array([[0.1, 0.2], [0.3, 0.4]]))
     store.write_clusters(CONFIG, np.array([0, 1]), 2)
     # results for different k are stored separately
@@ -174,7 +191,7 @@ def test_write_umap_and_clusters(store: DatasetStore):
 
 
 def test_write_clusters_validation(store: DatasetStore):
-    store.write_features(CONFIG, FEATURES)
+    store.write_features(CONFIG, FEATURES, image_paths(store))
     with pytest.raises(ValueError, match="Unsupported cluster method"):
         store.write_clusters(CONFIG, np.array([0, 1]), 2, method="dbscan")
     with pytest.raises(ValueError, match="dataset has 2 images"):
@@ -186,13 +203,15 @@ def test_prune_images(tmp_path: Path, store: DatasetStore):
     assert store.image_count == 2
     with pytest.raises(ValueError, match="not in the dataset"):
         store.prune_images([keep, "/elsewhere/c.jpg"])
+    with pytest.raises(ValueError, match="stored dataset order"):
+        store.prune_images(image_paths(store)[::-1])
     store.prune_images([keep])
     # cached count is cleared
     assert store.image_count == 1
     df = store.image_data()
     assert df["image_path"].to_list() == [keep]
     assert df["image_size"].to_list() == [[10, 20]]
-    store.write_features(CONFIG, FEATURES[:1])
+    store.write_features(CONFIG, FEATURES[:1], [keep])
     with pytest.raises(ValueError, match="existing models are present"):
         store.prune_images([])
 

@@ -377,6 +377,51 @@ def test_save_features_unknown_paths(tmp_path: Path, tmp_image_dir: Path):
         dataset.save_features(feature_df, CONFIG)
 
 
+def test_save_features_rejects_out_of_order_paths(tmp_path: Path, tmp_image_dir: Path):
+    dataset = ImageDataset.create(
+        image_dir=tmp_image_dir, storage_path=tmp_path / "data.h5", max_images=2
+    )
+    image_paths = [str(p) for p in dataset.get_image_paths()]
+    feature_df = pl.DataFrame(
+        {
+            "image_path": list(reversed(image_paths)),
+            "features": np.array([[2.0, 0.0], [0.0, 2.0]]),
+        }
+    )
+    with pytest.raises(ValueError, match="stored dataset order"):
+        dataset.save_features(feature_df, CONFIG)
+    assert not dataset.has_features(CONFIG)
+
+
+def test_save_features_rejects_out_of_order_subset(tmp_path: Path, tmp_image_dir: Path):
+    dataset = ImageDataset.create(
+        image_dir=tmp_image_dir, storage_path=tmp_path / "data.h5"
+    )
+    image_paths = [str(p) for p in dataset.get_image_paths()]
+    assert len(image_paths) >= 3
+    # subset with one image missing, out of order: must not prune
+    subset = [image_paths[2], image_paths[0]]
+    feature_df = pl.DataFrame(
+        {"image_path": subset, "features": np.array([[2.0, 0.0], [0.0, 2.0]])}
+    )
+    with pytest.raises(ValueError, match="stored dataset order"):
+        dataset.save_features(feature_df, CONFIG)
+    # inventory untouched
+    assert dataset.image_count == len(image_paths)
+
+
+def test_save_features_rejects_duplicate_paths(tmp_path: Path, tmp_image_dir: Path):
+    dataset = ImageDataset.create(
+        image_dir=tmp_image_dir, storage_path=tmp_path / "data.h5", max_images=2
+    )
+    first = str(next(dataset.get_image_paths()))
+    feature_df = pl.DataFrame(
+        {"image_path": [first, first], "features": np.array([[2.0, 0.0], [0.0, 2.0]])}
+    )
+    with pytest.raises(ValueError, match="must be unique"):
+        dataset.save_features(feature_df, CONFIG)
+
+
 def test_has_features(tmp_path: Path, tmp_image_dir: Path):
     dataset = ImageDataset.create(
         image_dir=tmp_image_dir, storage_path=tmp_image_dir / "data.h5", max_images=2

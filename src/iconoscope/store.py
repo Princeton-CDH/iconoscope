@@ -353,20 +353,38 @@ class DatasetStore:
 
     ## writes
 
-    def prune_images(self, keep_paths: Sequence[str]) -> None:
+    @staticmethod
+    def _check_path_order(
+        paths: pl.Series | Sequence[str], stored: pl.Series | Sequence[str]
+    ) -> None:
+        """Check that `paths` are unique, all in `stored`, and in stored
+        order (gaps allowed). Stored data is aligned to image order by row
+        position, so this order is fixed when the dataset is created."""
+        paths = pl.Series(paths, dtype=pl.String)
+        stored = pl.Series(stored, dtype=pl.String)
+        if paths.is_duplicated().any():
+            raise ValueError("image paths must be unique")
+        if not paths.is_in(stored.implode()).all():
+            raise ValueError("image paths not in the dataset")
+        if not paths.equals(
+            stored.filter(stored.is_in(paths.implode())), check_names=False
+        ):
+            raise ValueError("image paths must be in stored dataset order")
+
+    def prune_images(self, keep_paths: pl.Series | Sequence[str]) -> None:
         """Reduce the image inventory to `keep_paths` (absolute, as returned by
-        :meth:`image_data`), in the given order. Only allowed before any
-        features are stored, since stored features are aligned to image order."""
+        :meth:`image_data`), which must be in stored order. Only allowed before
+        any features are stored, since stored features are aligned to image
+        order."""
         with self.open("r+"):
             if self.has_features():
                 raise ValueError(
                     "cannot prune image paths when existing models are present"
                 )
-            keep_df = pl.DataFrame({"image_path": list(keep_paths)}).join(
-                self.image_data(), on="image_path", how="left"
-            )
-            if keep_df["image_size"].null_count():
-                raise ValueError("cannot prune to paths not in the dataset")
+            img_df = self.image_data()
+            keep_paths = pl.Series(keep_paths, dtype=pl.String)
+            self._check_path_order(keep_paths, img_df["image_path"])
+            keep_df = img_df.filter(pl.col.image_path.is_in(keep_paths.implode()))
             rel_paths = [
                 str(Path(p).relative_to(self.image_dir)) for p in keep_df["image_path"]
             ]
@@ -377,21 +395,32 @@ class DatasetStore:
         self.__dict__.pop("image_count", None)
 
     def write_features(
-        self, config: EmbeddingConfig, features, overwrite: bool = False
+        self,
+        config: EmbeddingConfig,
+        features,
+        image_paths: pl.Series | Sequence[str],
+        overwrite: bool = False,
     ) -> None:
         """Store features for a configuration, along with config attributes so
         it can be reconstructed. Features must be 2-dimensional with one row
-        per image, in stored image order. If features for the configuration
+        per image; `image_paths` (absolute, one per row) must match the stored
+        images exactly, in stored order. If features for the configuration
         exist, raises ValueError unless `overwrite`, in which case the whole
         model group is replaced (removing derived umap/cluster data)."""
         if features.ndim != 2:
             raise ValueError("features must be 2-dimensional")
+        if len(image_paths) != features.shape[0]:
+            raise ValueError(
+                f"features have {features.shape[0]} rows; "
+                f"got {len(image_paths)} image paths"
+            )
         with self.open("r+"):
             if features.shape[0] != self.image_count:
                 raise ValueError(
                     f"features have {features.shape[0]} rows; "
                     f"dataset has {self.image_count} images"
                 )
+            self._check_path_order(image_paths, self.image_data()["image_path"])
             all_models_grp = self.file.require_group(self.schema.all_models_path())
             group_name = self.schema.model_group(config)
             if group_name in all_models_grp:

@@ -209,7 +209,6 @@ class ImageDataset:
         with self.store.open("r+") as store:
             # Image paths are shared across models and must match feature vectors.
             # Check that saved images match the current set before making any updates.
-            # TODO: replace pruning with aligning df to stored path order
             img_df = store.image_data()
             # error if any image paths are in the incoming df but not in the stored image paths
             unknown_img_df = df.join(img_df, on="image_path", how="anti")
@@ -218,12 +217,14 @@ class ImageDataset:
                     "image paths do not match the existing dataset "
                     f"({unknown_img_df.height} unknown paths)"
                 )
+            image_paths = df["image_path"]
             # if fewer images than stored (e.g. some failed to load), prune
-            # the inventory; only allowed before any features are saved
+            # the inventory; only allowed before any features are saved.
+            # the store validates path order and uniqueness before modifying
             if img_df.height != df.height:
-                store.prune_images(df["image_path"].to_list())
+                store.prune_images(image_paths)
 
-            store.write_features(config, features, overwrite=overwrite)
+            store.write_features(config, features, image_paths, overwrite=overwrite)
 
     def has_features(self, config: EmbeddingConfig | None = None) -> bool:
         """Check if features are stored for the specified model + preprocessing
