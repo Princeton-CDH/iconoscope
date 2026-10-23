@@ -23,7 +23,9 @@ pip install iconoscope
 
 ## Usage
 
-iconoscope functionality is currently command-line only.
+iconoscope functionality is currently command-line only. A typical workflow
+is `create` → `embed` → `mosaic` (and optionally `umap`, `cluster`, `info`).
+Run `iconoscope <command> --help` for all options.
 
 ### create
 
@@ -34,50 +36,127 @@ does not load an embedding model.
 iconoscope create path/to/images/ my_collection.h5
 ```
 
-iconoscope will search for image files anywhere within the specified image directory. Supported image extensions are:
-
-- `.jpg`
-- `.jpeg`
-- `.png`
-- `.tiff`
-- `.webp`
-- `.avif`
+iconoscope will search for image files anywhere within the specified image
+directory. Supported image extensions (matched case-insensitively) are
+`.jpg`, `.jpeg`, `.png`, `.tiff`, `.webp`, and `.avif`. Use `--limit N` to
+include at most N images (an arbitrary subset).
 
 ### embed
 
-Extract features with a pre-trained image model (currently DINOv2) and save
-them to an existing dataset:
+Extract features with a pre-trained image model and save them to an existing
+dataset:
 
 ```console
 iconoscope embed my_collection.h5
+iconoscope embed my_collection.h5 --model siglip --center-crop 60 --grayscale
 ```
 
+Available models (`-m/--model`):
+
+| name | Hugging Face model | dimensions |
+| -------- | ----------------------------------------- | ---------- |
+| `dinov2` | `facebook/dinov2-base` (default) | 768 |
+| `dinov3` | `facebook/dinov3-vitb16-pretrain-lvd1689m`| 768 |
+| `resnet` | `microsoft/resnet-50` | 2048 |
+| `siglip` | `google/siglip-base-patch16-224` | 768 |
+| `clip` | `openai/clip-vit-base-patch32` | 768 |
+
+Preprocessing options:
+
+- `--center-crop CROP`: square center crop retaining CROP percent (0–100\] of
+  the shortest edge; replaces the model's default resize/crop
+- `--grayscale`: convert images to grayscale before embedding
+
+Each model + preprocessing combination is stored as a separate
+*configuration*, labeled `model/key` (e.g. `dinov2/defaults`,
+`siglip/center_crop=0.6_grayscale`), so multiple configurations can coexist in
+one dataset. If features for a configuration already exist, `embed` does
+nothing unless `-u/--update` is given; updating replaces the features and
+removes any UMAP or cluster results for that configuration.
+
 If an image becomes unreadable after the inventory is created, embedding
-skips it. When adding the first model, the skipped image is removed from the
-dataset's shared path inventory so paths and feature rows remain aligned. Once
-another model has been saved, skipped images cannot be removed because that
-would invalidate the existing model's rows; embedding reports an error instead.
+skips it. When adding the first configuration, the skipped image is removed
+from the dataset's shared image inventory so paths and feature rows remain
+aligned. Once any features have been saved, images cannot be removed because
+that would invalidate existing rows; embedding reports an error instead.
+
+### Selecting stored features
+
+Commands that use stored features (`mosaic`, `cluster`, `umap`) select a
+configuration either with the same `--model` / preprocessing options used for
+`embed`, or with `-c/--config MODEL/KEY` (as shown by `info`); the two cannot
+be combined. If neither is given and the dataset has only one configuration,
+that one is used; otherwise the default model (`dinov2`) with default
+preprocessing is used.
+
+### umap
+
+Calculate and save 2D UMAP coordinates for stored features. With no model or
+configuration specified, UMAP is calculated for all stored configurations;
+`--config` can be repeated. Existing coordinates are kept unless `-u/--update`
+is given.
+
+```console
+iconoscope umap my_collection.h5
+iconoscope umap my_collection.h5 -c dinov2/defaults -c clip/defaults --update
+```
+
+UMAP is not run with a fixed seed, so results vary between runs; saving them
+lets mosaics and notebooks reuse the same layout.
 
 ### mosaic
 
-To generate an embeddings mosaic image, pass the HDF5 dataset file created by the embed command. First, iconoscope will run UMAP (dimensionality reduction) on the embeddings to generate 2D coordinates for positioning images in the mosaic. The number of columns and rows for the mosaic is determined by the requested output size and the number of images; images are slotted into the grid based on UMAP coordinates, and then resized to fit into a grid cell. The UMAP coordinates are not generated with a predetermined seed, but the results are saved in the HDF5 file, so they can be reused on subsequent runs. To generate a mosaic with all the defaults options, run the mosaic command and specify dataset file:
+Generate a mosaic image where visually similar images appear near each other:
 
 ```console
 iconoscope mosaic my_collection.h5
+iconoscope mosaic my_collection.h5 -m clip --size 3000x1500 -o clip_mosaic.png
 ```
 
-By default, this will create a mosaic based on the name of the collection, e.g. `my_collection.jpg`. Output size and filename can be customized with command-line parameters. Thumbnail size is automatically determined to best fit images for the output mosaic size, based on the most common image aspect ratio in the dataset; images are scaled and center-cropped to fill their grid cell.
+If UMAP coordinates are not yet stored for the selected configuration, they
+are calculated and saved first. The number of grid columns and rows is
+determined by the output size and number of images; images are slotted into
+the grid based on UMAP coordinates. Thumbnail size is chosen to best fit the
+output size based on the most common image aspect ratio; images are scaled and
+center-cropped to fill their grid cell.
+
+Options:
+
+- `-o/--output`: output path (default: dataset name with `.jpg`, e.g. `my_collection.jpg`)
+- `-s/--size`: output size, a single number for a square or `WIDTHxHEIGHT` (default: 2000)
+- `--jpeg-quality`: 1–100, for JPEG output only
+- `-l/--limit N`: use at most N images
+
+If the canvas is too small for the number of images, the error message
+suggests a `--limit` or `--size` that would work.
+
+### cluster
+
+Cluster stored features with k-means and save the labels to the dataset:
+
+```console
+iconoscope cluster my_collection.h5 8
+```
+
+Prints the number of images per cluster. Results for different numbers of
+clusters are stored separately.
 
 ### info
 
-To check the content of an iconoscope HDF5 dataset file, use `iconoscope info`. This will report the number of images and what other information is included, e.g. UMAP coordinates. Example:
+Report dataset contents: schema, number of images and source directory, most
+common image size and aspect ratio, and for each stored configuration the
+feature dimensions, UMAP coordinates, and cluster results. Example:
 
 ```console
 iconoscope info my_collection.h5
 Details for my_collection.h5 :
-  4,302 image paths
-  dinov2 extracted features (4302x768)
-     umap coordinates (4302x2)
+  schema: iconoscope 0.2
+  4,302 image paths from /path/to/images
+	Most frequent image size:  1024x768
+	Most frequent aspect ratio: 1.33
+  dinov2/defaults extracted features (4302x768)
+	umap coordinates (4302x2)
+	4,302 cluster labels (kmeans, k=8)
 ```
 
 ## Notebooks
@@ -89,26 +168,44 @@ comparison across models, and an experimental PGP image explorer. See
 
 ## HDF5 file layout
 
-iconoscope stores image paths, extracted features, and derived data (like UMAP coordinates) in a single HDF5 file, organized per model so multiple embedding models can coexist in the same dataset:
+iconoscope stores image paths, extracted features, and derived data (UMAP
+coordinates, cluster labels) in a single HDF5 file (schema version 0.2),
+organized per model and preprocessing configuration so multiple
+configurations can coexist in the same dataset. All datasets are
+gzip-compressed.
 
 ```
-my_collection.h5
-└── image/                  (attrs: image_dir)
-    ├── paths               # image file paths relative to image_dir, shape (N,)
-    ├── sizes               # image width and height in pixels, shape (N, 2)
-    └── models/
-        └── dinov2/         # one group per embedding model
-            ├── features    # embedding vectors, shape (N, embed_dim)
-            ├── umap        # 2D UMAP coordinates, shape (N, 2) [optional, added by `mosaic`]
-            └── cluster     # cluster label per image, shape (N,) [optional, added by `cluster`]
-                            #   (attrs: n_clusters)
+my_collection.h5                (attrs: schema="iconoscope", schema_version=0.2)
+└── image/                      (attrs: image_dir)
+    ├── paths                   # image file paths relative to image_dir, shape (N,)
+    ├── sizes                   # image width and height in pixels, shape (N, 2)
+    └── models/                 # [optional, added by `embed`]
+        └── dinov2/             # one group per model
+            └── defaults/       # one group per preprocessing configuration (key)
+                │               #   (attrs: model, model_id, and any set options,
+                │               #    e.g. center_crop, grayscale)
+                ├── features    # embedding vectors, shape (N, embed_dim)
+                ├── umap        # 2D UMAP coordinates, shape (N, 2) [optional, added by `umap`/`mosaic`]
+                └── clusters/   # [optional, added by `cluster`]
+                    └── kmeans_8  # cluster label per image, shape (N,)
+                                  #   (attrs: method, n_clusters)
 ```
+
+The configuration key is `defaults` when no preprocessing options are set;
+otherwise it joins the set options, e.g. `center_crop=0.6_grayscale`
+(`center_crop` is stored as a fraction). Cluster datasets are named
+`{method}_{n_clusters}`; `kmeans` is currently the only method.
 
 `image_dir` is stored as an absolute path when the dataset is created, and
 image paths are stored relative to it; iconoscope combines them when loading,
 so a dataset can be used from any working directory. If the image directory
-moves, update the `image_dir` attribute. All datasets in `image/` and under each
-model share the same row order: row *i* is the same image everywhere.
+moves, update the `image_dir` attribute. All datasets in `image/` and under
+each configuration share the same row order: row *i* is the same image
+everywhere. Image order is fixed once any features are stored.
+
+iconoscope validates the file type, `schema` and `schema_version` attributes,
+and required `image/` contents when opening a dataset; files from other
+schema versions are rejected.
 
 ## Acknowledgments
 
