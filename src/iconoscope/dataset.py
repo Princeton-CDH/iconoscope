@@ -37,20 +37,12 @@ def find_images(
     if extensions is None:
         extensions = DEFAULT_IMG_EXTENSIONS.copy()
 
-    # because we want case-insensitive matching and will usually look for multiple
-    # image extensions, by default look for any file extension and filter in the loop
-    rglob_pattern = "*.*"
-    single_ext = False
-    # if  there is only one extension, use that as the pattern (loses the case-insensitivity)
-    if len(extensions) == 1:
-        rglob_pattern = f"*{list(extensions)[0]}"
-        # ext-specific glob pattern means we can bypass the extra check
-        single_ext = True
-
+    # because we want case-insensitive matching of image extensions,
+    # find any file extension and do a case-insensitive filter in the loop
     found = 0
-    for file_path in base_dir.rglob(rglob_pattern):
+    for file_path in base_dir.rglob("*.*"):
         # return if found by single extension or if suffix is in the list
-        if single_ext or file_path.suffix.lower() in extensions:
+        if file_path.suffix.lower() in extensions:
             yield file_path
             found += 1
 
