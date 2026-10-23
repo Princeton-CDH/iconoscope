@@ -185,7 +185,9 @@ def extract_img_features(
     if model.ignore_unexpected:
         hf_logger.addFilter(load_filter)
     try:
-        embed_model = model_class.from_pretrained(model.id).to(device)
+        # from_pretrained already sets eval mode; set explicitly to ensure
+        # deterministic inference (dropout off, batchnorm uses running stats)
+        embed_model = model_class.from_pretrained(model.id).to(device).eval()
     finally:
         hf_logger.removeFilter(load_filter)
 
@@ -213,21 +215,21 @@ def extract_img_features(
         if transforms is not None:
             images = [transforms(img) for img in images]
         inputs = processor(images, return_tensors="pt", **processor_opts).to(device)
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = embed_model(**inputs)
             # some models (e.g. ResNet) return pooled output as (N, C, 1, 1);
             # flatten to (N, C) so it matches the expected embedding shape
             results = outputs.pooler_output.flatten(start_dim=1).cpu()
-            img_feature_df.extend(
-                pl.DataFrame(
-                    data={
-                        "image_path": paths,
-                        "features": results,
-                    }
-                )
+        img_feature_df.extend(
+            pl.DataFrame(
+                data={
+                    "image_path": paths,
+                    "features": results,
+                }
             )
-            # update progress bar (how many to increase, not the total count)
-            progbar.update(len(images))
+        )
+        # update progress bar (how many to increase, not the total count)
+        progbar.update(len(images))
 
     progbar.close()
     return img_feature_df

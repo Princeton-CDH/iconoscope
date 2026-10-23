@@ -31,6 +31,10 @@ def _fake_processor_and_model():
             self.device = device
             return self
 
+        def eval(self):
+            self.eval_mode = True
+            return self
+
         def __call__(self, n):
             return MagicMock(
                 pooler_output=torch.zeros((n, 768)),
