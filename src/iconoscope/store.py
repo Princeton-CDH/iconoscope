@@ -215,6 +215,14 @@ class DatasetStore:
         with self._h5() as f:
             return f[self.schema.image_group][self.schema.image_ds_paths].size
 
+    def image_paths(self) -> list[Path]:
+        """Absolute image paths, in stored order (without sizes)."""
+        with self._h5() as f:
+            img_grp = f[self.schema.image_group]
+            image_dir = Path(img_grp.attrs[self.schema.attr_image_dir])
+            rel_paths = img_grp[self.schema.image_ds_paths][:].astype("T")
+        return [image_dir / p for p in rel_paths]
+
     def image_data(self) -> pl.DataFrame:
         """Image inventory, in stored order: absolute ``image_path``,
         ``image_size`` (width, height), and ``aspect_ratio``."""

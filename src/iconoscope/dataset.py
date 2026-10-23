@@ -21,7 +21,7 @@ DEFAULT_IMG_EXTENSIONS = {".jpg", ".png", ".jpeg", ".tiff", ".webp", ".avif"}
 def find_images(
     base_dir: Path,
     extensions: set[str] | None = None,
-    max: int | None = None,
+    max_images: int | None = None,
 ) -> Iterator[Path]:
     """
     Find images within the specified directory. Can optionally limit by file extension
@@ -29,7 +29,7 @@ def find_images(
 
     Results are yielded in filesystem order, which is arbitrary and varies by
     platform and filesystem (e.g., it may look sorted on macOS but not on Linux).
-    When `max` is specified, the subset of images returned is therefore arbitrary
+    When `max_images` is specified, the subset of images returned is therefore arbitrary
     and not guaranteed to be the same across systems; callers should not assume
     any particular order or subset.
     """
@@ -56,7 +56,7 @@ def find_images(
             found += 1
 
         # stop after the requested maximum if there is one
-        if max is not None and found >= max:
+        if max_images is not None and found >= max_images:
             break
 
 
@@ -100,7 +100,9 @@ class ImageDataset:
 
         valid_paths = []
         image_sizes = []
-        for path in find_images(image_dir, extensions=extensions, max=max_images):
+        for path in find_images(
+            image_dir, extensions=extensions, max_images=max_images
+        ):
             try:
                 with Image.open(path) as image:
                     image.verify()
@@ -140,8 +142,7 @@ class ImageDataset:
 
     def get_image_paths(self) -> Iterator[Path]:
         """Yield image paths from the stored dataset."""
-        for path in self.get_image_data()["image_path"]:
-            yield Path(path)
+        yield from self.store.image_paths()
 
     @property
     def image_count(self) -> int:
@@ -272,7 +273,6 @@ class ImageDataset:
                 for model_grp_name in all_models_grp.keys():
                     model_grp = all_models_grp[model_grp_name]
 
-                    # TODO: update to report multiple features for model with alt preprocessing
                     # each model can have one or more group with preprocessing options
                     for model_opt_grp_name in model_grp.keys():
                         model_data = {}
@@ -289,7 +289,7 @@ class ImageDataset:
                         cluster_info = store.cluster_info(config) if config else []
                         if cluster_info:
                             model_data["clusters"] = cluster_info
-                        # for simplicity of reporting, report by model with option name as stored in the data sile
+                        # for simplicity of reporting, report by model with option name as stored in the data file
                         info["models"][f"{model_grp_name}/{model_opt_grp_name}"] = (
                             model_data
                         )

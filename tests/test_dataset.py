@@ -106,9 +106,9 @@ def test_get_image_paths(tmp_path: Path, tmp_image_dir: Path):
 
     test_image_paths = ["foobar_a.jpg", "b.jpg"]
     with patch.object(
-        img_ds,
-        "get_image_data",
-        return_value=pl.DataFrame({"image_path": test_image_paths}),
+        img_ds.store,
+        "image_paths",
+        return_value=[Path(p) for p in test_image_paths],
     ):
         assert [str(p) for p in img_ds.get_image_paths()] == test_image_paths
 
@@ -435,7 +435,7 @@ def test_find_images_recurses_subdirs(tmp_path: Path):
 
 
 def test_find_images_max(tmp_image_dir: Path):
-    items = list(find_images(tmp_image_dir, max=2))
+    items = list(find_images(tmp_image_dir, max_images=2))
     assert len(items) == 2
     # which images are returned depends on filesystem order (differs between
     # macOS and Linux), so only check that they are a subset of all images

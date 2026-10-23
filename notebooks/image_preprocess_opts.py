@@ -70,7 +70,9 @@ def _(
 
     mo.stop(not img_dir.value, mo.md("*Enter an image directory to preview.*"))
 
-    _paths = sorted(find_images(Path(img_dir.value).expanduser(), max=num_images.value))
+    _paths = sorted(
+        find_images(Path(img_dir.value).expanduser(), max_images=num_images.value)
+    )
     _originals = [Image.open(p).convert("RGB") for p in _paths]
     _model = AVAILABLE_MODELS[model_select.value]
     _processor = transformers.AutoImageProcessor.from_pretrained(_model.id)
