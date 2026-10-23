@@ -99,8 +99,15 @@ def _(DEFAULT_MODEL, ImageDataset, Path, dataset_path, mo):
     if dataset_path.value.strip():
         mo.stop(not _path.is_file(), mo.md(f"**Dataset not found:** `{_path}`"))
         dataset = ImageDataset(storage_path=_path)
-        _configs = dataset.configs_by_label()
-        mo.stop(not _configs, mo.md("**No embedding features found in this dataset.**"))
+        # only configs with stored umap can be plotted
+        _configs = dataset.configs_by_label(require_umap=True)
+        mo.stop(
+            not _configs,
+            mo.md(
+                "**No UMAP found in this dataset;** "
+                "run `iconoscope mosaic` to generate."
+            ),
+        )
         # default model with default preprocessing if present, else first
         _default = next(
             (
@@ -118,7 +125,6 @@ def _(DEFAULT_MODEL, ImageDataset, Path, dataset_path, mo):
 @app.cell
 def _(dataset, embedding, mo, n_sample, np):
     if dataset is not None:
-        # umap is generated (and saved) on first load for this config
         with mo.status.spinner(f"Loading {embedding.selected_key}"):
             _df = dataset.load_data(embedding.value, umap=True)
         # sample after loading, so umap coords are generated for all images

@@ -104,7 +104,10 @@ def test_create_passes_limit(tmp_path: Path):
 
 
 def run_cli(argv: list[str], command: str) -> argparse.Namespace:
-    """Run the cli with a mock handler; return the parsed args."""
+    """Run the cli with a mock handler; return the parsed args.
+    For commands that require an existing dataset, the dataset file is created."""
+    if command in cli.STORED_CONFIG_COMMANDS | {"embed"}:
+        Path(argv[1]).touch()
     handler = MagicMock()
     command_module = ModuleType(f"iconoscope.commands.{command}")
     command_module.main = handler
@@ -152,7 +155,7 @@ def test_limit_invalid(tmp_path: Path, value, capsys):
     assert "--limit" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("command", ["embed", "mosaic", "cluster"])
+@pytest.mark.parametrize("command", ["embed", "mosaic", "cluster", "umap"])
 def test_model_short_flag(tmp_path: Path, command):
     dataset = tmp_path / "d.h5"
     dataset.touch()
@@ -160,6 +163,16 @@ def test_model_short_flag(tmp_path: Path, command):
     if command == "cluster":
         argv.append("3")
     assert run_cli(argv, command).model == "clip"
+
+
+@pytest.mark.parametrize("command", ["mosaic", "cluster", "umap"])
+def test_config_short_flag(tmp_path: Path, command):
+    argv = [command, str(tmp_path / "d.h5"), "-c", "clip/defaults"]
+    if command == "cluster":
+        argv.append("3")
+    config = run_cli(argv, command).config
+    # umap accepts multiple configs, so the value is a list
+    assert config == (["clip/defaults"] if command == "umap" else "clip/defaults")
 
 
 def test_create_old_max_flag_rejected(tmp_path: Path):

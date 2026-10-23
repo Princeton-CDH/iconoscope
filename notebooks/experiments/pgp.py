@@ -336,7 +336,14 @@ def _(
 
 @app.cell
 def _(image_info_df, img_dataset, mo, pl):
-    _configs = img_dataset.configs_by_label()
+    # only configs with stored umap can be plotted
+    _configs = img_dataset.configs_by_label(require_umap=True)
+    mo.stop(
+        not _configs,
+        mo.md(
+            "**No UMAP found in this dataset;** run `iconoscope mosaic` to generate."
+        ),
+    )
     embedding_select = mo.ui.dropdown(
         options=_configs, value=list(_configs.keys())[0], label="Embedding"
     )
@@ -407,7 +414,6 @@ def _(image_info_df, img_dataset, mo, pl):
 
 @app.cell
 def _(embedding_select, img_dataset, mo):
-    # umap is generated (and saved) on first load for this config
     with mo.status.spinner(f"Loading {embedding_select.selected_key}"):
         umap_df = img_dataset.load_data(embedding_select.value, umap=True)
     return (umap_df,)

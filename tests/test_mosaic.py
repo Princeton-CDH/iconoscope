@@ -188,13 +188,18 @@ def mock_dataset(tmp_path):
 def test_generate_mosaic_sample_size(
     mock_dataset, tmp_path, sample_size, expected_count
 ) -> None:
-    with patch("iconoscope.mosaic.render_mosaic") as render:
+    with (
+        patch("iconoscope.mosaic.render_mosaic") as render,
+        patch("iconoscope.mosaic.get_or_compute_umap") as compute_umap,
+    ):
         mosaic.generate_mosaic(
             mock_dataset,
             config=None,
             output=tmp_path / "out.jpg",
             sample_size=sample_size,
         )
+    compute_umap.assert_called_once_with(mock_dataset, None)
+    mock_dataset.load_data.assert_called_once_with(None, umap=True)
     paths, coords, *_ = render.call_args.args
     assert len(paths) == expected_count
     assert len(coords) == expected_count
@@ -343,6 +348,7 @@ def test_layout_mosaic_too_small() -> None:
 def test_generate_mosaic_too_small(mock_dataset, tmp_path) -> None:
     with (
         patch("iconoscope.mosaic.load_thumbnail") as load_thumbnail,
+        patch("iconoscope.mosaic.get_or_compute_umap"),
         pytest.raises(mosaic.CanvasTooSmallError),
     ):
         mosaic.generate_mosaic(

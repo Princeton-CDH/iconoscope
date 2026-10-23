@@ -1,6 +1,6 @@
 import argparse
 
-from iconoscope.commands import get_embedding_config, require_features
+from iconoscope.commands import resolve_config
 from iconoscope.dataset import ImageDataset
 from iconoscope.mosaic import CanvasTooSmallError, generate_mosaic
 
@@ -18,10 +18,8 @@ def canvas_too_small_message(err: CanvasTooSmallError) -> str:
 
 
 def main(args: argparse.Namespace) -> None:
-    embed_config = get_embedding_config(args)
-
     img_dataset = ImageDataset(storage_path=args.dataset)
-    require_features(img_dataset, embed_config)
+    embed_config = resolve_config(img_dataset, args)
     try:
         generate_mosaic(
             img_dataset,
