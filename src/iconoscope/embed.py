@@ -4,8 +4,8 @@ import polars as pl
 import torch
 import transformers
 from accelerate import Accelerator
-from torch.utils.data import DataLoader
 from PIL import Image
+from torch.utils.data import DataLoader, IterableDataset
 from torchvision.transforms import v2
 from torchvision.transforms.v2.functional import center_crop
 from tqdm import tqdm
@@ -47,6 +47,17 @@ class ExpectedUnexpectedKeysFilter(logging.Filter):
         # every flagged key is an expected unused key; drop the report
         logger.debug("Suppressed expected load report: %s", msg)
         return False
+
+
+class TorchImageDataset(IterableDataset):
+    """Torch iterable dataset wrapper for :class:`ImageDataset`, so the
+    dataset module does not depend on torch."""
+
+    def __init__(self, img_dataset: ImageDataset):
+        self.img_dataset = img_dataset
+
+    def __iter__(self):
+        return iter(self.img_dataset)
 
 
 def model_input_size(processor) -> tuple[int, int]:
@@ -180,7 +191,7 @@ def extract_img_features(
 
     batch_size = 256
     dataloader = DataLoader(
-        img_dataset,
+        TorchImageDataset(img_dataset),
         batch_size=batch_size,
         collate_fn=ImageDataset.collate,
     )

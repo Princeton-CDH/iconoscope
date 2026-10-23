@@ -8,13 +8,6 @@ import numpy as np
 import polars as pl
 from PIL import Image
 
-try:
-    from torch.utils.data import IterableDataset
-except ImportError:
-    # torch is only needed to generate embeddings; allow loading and
-    # exploring stored data without it (e.g. in notebooks)
-    IterableDataset = object
-
 from iconoscope.models import EmbeddingConfig
 from iconoscope.store import DatasetStore, StorageSchema
 from iconoscope.umap import reduce_features
@@ -68,10 +61,11 @@ def find_images(
 
 
 @dataclass
-class ImageDataset(IterableDataset):
+class ImageDataset:
     """
-    Persistent image dataset. Provides iterable image dataset logic for use with torch DataLoader,
-    but also provides logic for saving and loading from HDF5 file.
+    Persistent image dataset, stored in an HDF5 file. Iterating yields
+    loaded images and paths; see :mod:`iconoscope.embed` for use with a
+    torch DataLoader (torch is not required to load or explore stored data).
     """
 
     #: path to existing hdf5 storage for image dataset; use :meth:`create`
@@ -162,7 +156,7 @@ class ImageDataset(IterableDataset):
             try:
                 img = Image.open(file_path).convert("RGB")
             except OSError as err:
-                logger.warning(f"Error loading {file_path}: {err}")
+                logger.warning("Error loading %s: %s", file_path, err)
                 continue
             # yield a tuple of image object and file path as string
             yield img, str(file_path)
@@ -258,11 +252,11 @@ class ImageDataset(IterableDataset):
 
             img_grp = f[self.schema.image_group]
             # image data includes aspect ratio
-            img_df = self.store.image_data()
+            img_df = store.image_data()
 
             info = {
-                "image_paths": self.store.image_count,
-                "image_dir": str(self.store.image_dir),
+                "image_paths": store.image_count,
+                "image_dir": str(store.image_dir),
                 # TODO: report number / % of images with mode size/aspect?
                 "image_size_mode": img_df["image_size"].mode().to_list()[0],
                 "image_aspect_mode": img_df["aspect_ratio"].mode().to_list()[0],
@@ -356,13 +350,14 @@ class ImageDataset(IterableDataset):
                     umap_coords = store.umap(config)
                     # if umap has not yet been generated, calculate and save
                     if umap_coords is None:
-                        print("** umap not present, calculating")
+                        logger.info(
+                            "UMAP not present for %s; calculating", config.label
+                        )
                         feature_data = store.features(config)
                         umap_coords = reduce_features(feature_data)
-                        print("saving umap coords")
                         store.write_umap(config, umap_coords)
                     else:
-                        print("*** loading saved umap coords")
+                        logger.debug("Loading saved UMAP for %s", config.label)
                     data["umap"] = umap_coords
 
                 if features:
