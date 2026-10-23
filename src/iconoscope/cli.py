@@ -189,7 +189,7 @@ def main():
     # Validate embed sources before lazy-loading the embedding stack.
     args = parser.parse_args()
     if not args.command:
-        parser.error("a command is required")
+        parser.error("You must specify which command to run")
     if args.command == "embed":
         if not args.dataset.is_file():
             parser.error(f"{args.dataset} is not an existing dataset file")
