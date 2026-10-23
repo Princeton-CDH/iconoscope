@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from iconoscope.models import DEFAULT_MODEL, EmbeddingConfig
-from iconoscope.store import DatasetStore, StorageSchema
+from iconoscope.store import DatasetStore, InvalidDatasetError, StorageSchema
 
 PATHS = ["a.jpg", "sub/b.png"]
 SIZES = [(32, 24), (10, 20)]
@@ -19,6 +19,70 @@ def store(tmp_path: Path) -> DatasetStore:
 def test_init_requires_existing_file(tmp_path: Path):
     with pytest.raises(FileNotFoundError):
         DatasetStore(tmp_path / "missing.h5")
+
+
+def test_init_validates_hdf5(tmp_path: Path):
+    path = tmp_path / "empty.h5"
+    path.touch()
+    with pytest.raises(InvalidDatasetError, match="not an HDF5 file"):
+        DatasetStore(path)
+
+
+def _write_attrs(path: Path, **attrs):
+    with h5py.File(path, "r+") as f:
+        for name, value in attrs.items():
+            if value is None:
+                del f.attrs[name]
+            else:
+                f.attrs[name] = value
+
+
+@pytest.mark.parametrize(
+    "attrs, message",
+    [
+        ({"schema": None}, "not an iconoscope dataset"),
+        ({"schema": "other"}, r"not an iconoscope dataset \(schema: other\)"),
+        ({"schema_version": None}, "unsupported schema version None"),
+        ({"schema_version": 0.1}, "unsupported schema version 0.1"),
+    ],
+)
+def test_init_validates_schema(store: DatasetStore, attrs, message):
+    _write_attrs(store.path, **attrs)
+    with pytest.raises(InvalidDatasetError, match=message):
+        DatasetStore(store.path)
+
+
+@pytest.mark.parametrize(
+    "remove, message",
+    [
+        ("image", "missing required group `image`"),
+        ("image/paths", "missing required dataset `image/paths`"),
+        ("image/sizes", "missing required dataset `image/sizes`"),
+    ],
+)
+def test_init_validates_required_data(store: DatasetStore, remove, message):
+    with h5py.File(store.path, "r+") as f:
+        del f[remove]
+    with pytest.raises(InvalidDatasetError, match=message):
+        DatasetStore(store.path)
+
+
+def test_init_validates_image_dir(store: DatasetStore):
+    with h5py.File(store.path, "r+") as f:
+        del f["image"].attrs["image_dir"]
+    with pytest.raises(InvalidDatasetError, match="missing required attribute"):
+        DatasetStore(store.path)
+
+
+def test_init_validates_models_group(store: DatasetStore):
+    with h5py.File(store.path, "r+") as f:
+        f["image"].create_dataset("models", data=[1])
+    with pytest.raises(InvalidDatasetError, match="is not a group"):
+        DatasetStore(store.path)
+
+
+def test_invalid_dataset_error_is_value_error():
+    assert issubclass(InvalidDatasetError, ValueError)
 
 
 def test_create_writes_schema_and_images(tmp_path: Path, store: DatasetStore):

@@ -1,15 +1,14 @@
 import argparse
 import time
 
-from iconoscope.commands import get_embedding_config
-from iconoscope.dataset import ImageDataset
+from iconoscope.commands import get_embedding_config, load_dataset
 from iconoscope.embed import extract_img_features
 
 
 def main(args: argparse.Namespace) -> None:
     embed_config = get_embedding_config(args)
     try:
-        img_dataset = ImageDataset(storage_path=args.dataset)
+        img_dataset = load_dataset(args.dataset)
 
         if img_dataset.has_features(embed_config) and not args.update:
             print(

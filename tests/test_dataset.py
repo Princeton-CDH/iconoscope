@@ -10,7 +10,7 @@ import pytest
 from PIL import Image
 
 from iconoscope.dataset import ImageDataset, find_images
-from iconoscope.store import StorageSchema
+from iconoscope.store import InvalidDatasetError, StorageSchema
 from iconoscope.models import DEFAULT_MODEL, EmbeddingConfig, EmbeddingModel
 
 CONFIG = EmbeddingConfig(DEFAULT_MODEL)
@@ -23,10 +23,11 @@ def test_init_requires_existing_storage(tmp_path):
     with pytest.raises(ValueError, match=r"does not exist.*create\(\)"):
         ImageDataset(storage_path=tmp_path / "a.h5")
 
-    # storage path exists (currently not validated)
+    # storage path exists but is not a valid dataset
     h5_datafile = tmp_path / "z.h5"
     h5_datafile.touch()
-    assert ImageDataset(storage_path=h5_datafile)
+    with pytest.raises(InvalidDatasetError, match="not an HDF5 file"):
+        ImageDataset(storage_path=h5_datafile)
 
 
 def test_create_validation(tmp_path):
