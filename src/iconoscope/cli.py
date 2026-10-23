@@ -125,12 +125,19 @@ def add_model_args(parser: argparse.ArgumentParser, stored: bool = False) -> Non
     """Add embedding model and preprocessing options. When ``stored`` is True
     (for commands that use existing features), the model has no parser
     default, so the command can tell whether model options were specified."""
+    if stored:
+        model_help = (
+            "Embedding model (default: the only stored configuration if there "
+            f"is just one; otherwise {DEFAULT_MODEL.name})"
+        )
+    else:
+        model_help = f"Embedding model (default: {DEFAULT_MODEL.name})"
     parser.add_argument(
         "-m",
         "--model",
         choices=list(AVAILABLE_MODELS),
         default=None if stored else DEFAULT_MODEL.name,
-        help=f"Embedding model (default: {DEFAULT_MODEL.name})",
+        help=model_help,
     )
     parser.add_argument(
         "--center-crop",
@@ -335,10 +342,8 @@ def main():
             parser.error(
                 "--config cannot be combined with --model or preprocessing options"
             )
-        # single-config commands use the default model when nothing is specified;
-        # umap without any model options runs for all stored configurations
-        if args.command != "umap" and not args.config and args.model is None:
-            args.model = DEFAULT_MODEL.name
+        # when no model or config is specified, the stored configuration
+        # is determined by the command based on the dataset contents
     if args.command == "mosaic":
         if args.jpeg_quality is None:
             args.jpeg_quality = DEFAULT_JPEG_QUALITY

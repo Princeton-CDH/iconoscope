@@ -63,6 +63,15 @@ def test_mosaic_by_config_label(mock_generate, dataset_with_features):
     assert mock_generate.call_args.args[1] == config
 
 
+@patch("iconoscope.commands.mosaic.generate_mosaic")
+def test_mosaic_defaults_to_only_stored_config(mock_generate, dataset_with_features):
+    # no model or config specified; dataset only has center crop features
+    mosaic.main(mosaic_args(dataset_with_features.storage_path, model=None))
+    assert mock_generate.call_args.args[1] == EmbeddingConfig(
+        DEFAULT_MODEL, center_crop=0.5
+    )
+
+
 def make_canvas_error(image_count, width, height, aspect_ratio=1.0):
     try:
         mosaic_layout.check_canvas_size(image_count, width, height, aspect_ratio)

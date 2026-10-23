@@ -53,14 +53,44 @@ def get_stored_config(
         ) from None
 
 
+def model_opts_specified(args: argparse.Namespace) -> bool:
+    """True if a model or any preprocessing option was specified."""
+    return args.model is not None or any(
+        getattr(args, opt) not in (None, False)
+        for opt in EmbeddingConfig.option_names()
+    )
+
+
+def default_stored_config(img_dataset: ImageDataset) -> EmbeddingConfig:
+    """Embedding configuration to use when none is specified: the only stored
+    configuration if there is just one; otherwise the default model with
+    default preprocessing, if stored. Exits with an error if there are no
+    stored features or the choice is ambiguous."""
+    available = img_dataset.configs_by_label()
+    if not available:
+        raise SystemExit("No features in dataset; run `iconoscope embed` first")
+    if len(available) == 1:
+        return next(iter(available.values()))
+    default = EmbeddingConfig(DEFAULT_MODEL)
+    if default.label in available:
+        return default
+    raise SystemExit(
+        "Dataset has features for multiple configurations; specify one with "
+        f"--config or --model: {', '.join(available)}"
+    )
+
+
 def resolve_config(
     img_dataset: ImageDataset, args: argparse.Namespace
 ) -> EmbeddingConfig:
     """Determine a single embedding configuration from CLI args, specified
     either as ``--config MODEL/KEY`` or as model + preprocessing options;
-    exits with an error if the dataset has no features for it."""
+    exits with an error if the dataset has no features for it. If neither
+    is specified, uses :func:`default_stored_config`."""
     if getattr(args, "config", None):
         return get_stored_config(img_dataset, args.config)
+    if not model_opts_specified(args):
+        return default_stored_config(img_dataset)
     config = get_embedding_config(args)
     require_features(img_dataset, config)
     return config
@@ -77,10 +107,8 @@ def resolve_configs(
         # dict to drop duplicates while preserving order
         labels = dict.fromkeys(args.config)
         return [get_stored_config(img_dataset, lbl, available) for lbl in labels]
-    if args.model is not None or args.center_crop is not None or args.grayscale:
-        config = get_embedding_config(args)
-        require_features(img_dataset, config)
-        return [config]
+    if model_opts_specified(args):
+        return [resolve_config(img_dataset, args)]
     configs = list(img_dataset.configs_by_label().values())
     if not configs:
         raise SystemExit("No features in dataset; run `iconoscope embed` first")

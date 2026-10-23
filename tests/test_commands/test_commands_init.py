@@ -112,8 +112,8 @@ def test_cli_stored_config_single(argv, expected, tmp_path):
     dataset.touch()
     args = parse_cli_args([argv[0], str(dataset), *argv[1:]])
     assert args.config == expected
-    # default model is only set when --config is not used
-    assert args.model == (None if expected else DEFAULT_MODEL.name)
+    # no model default from the parser; determined by the command from the dataset
+    assert args.model is None
 
 
 def test_cli_umap_args(tmp_path):
@@ -167,6 +167,81 @@ def test_cli_embed_has_no_config(tmp_path):
     dataset.touch()
     with pytest.raises(SystemExit):
         parse_cli_args(["embed", str(dataset), "--config", "clip/defaults"])
+
+
+def save_test_features(dataset, *configs):
+    df = dataset.get_image_data().select("image_path")
+    for config in configs:
+        dataset.save_features(
+            df.with_columns(features=np.zeros((df.height, 4))), config
+        )
+
+
+def no_model_args(**opts) -> argparse.Namespace:
+    defaults = {"model": None, "center_crop": None, "grayscale": False, "config": None}
+    return argparse.Namespace(**(defaults | opts))
+
+
+def test_default_stored_config_single(tmp_image_dir):
+    from iconoscope.commands import default_stored_config, resolve_config
+    from iconoscope.dataset import ImageDataset
+
+    dataset = ImageDataset.create(tmp_image_dir, tmp_image_dir / "data.h5")
+    clip_gray = EmbeddingConfig(AVAILABLE_MODELS["clip"], grayscale=True)
+    save_test_features(dataset, clip_gray)
+    # only one stored config: used as default, even if not the default model
+    assert default_stored_config(dataset) == clip_gray
+    assert resolve_config(dataset, no_model_args()) == clip_gray
+
+
+def test_default_stored_config_multiple_with_default(tmp_image_dir):
+    from iconoscope.commands import default_stored_config
+    from iconoscope.dataset import ImageDataset
+
+    dataset = ImageDataset.create(tmp_image_dir, tmp_image_dir / "data.h5")
+    save_test_features(
+        dataset,
+        EmbeddingConfig(AVAILABLE_MODELS["clip"]),
+        EmbeddingConfig(DEFAULT_MODEL),
+    )
+    # multiple stored configs: default model with default options is used
+    assert default_stored_config(dataset) == EmbeddingConfig(DEFAULT_MODEL)
+
+
+def test_default_stored_config_ambiguous(tmp_image_dir):
+    from iconoscope.commands import default_stored_config
+    from iconoscope.dataset import ImageDataset
+
+    dataset = ImageDataset.create(tmp_image_dir, tmp_image_dir / "data.h5")
+    save_test_features(
+        dataset,
+        EmbeddingConfig(AVAILABLE_MODELS["clip"]),
+        EmbeddingConfig(DEFAULT_MODEL, grayscale=True),
+    )
+    with pytest.raises(SystemExit, match="multiple configurations.*clip/defaults"):
+        default_stored_config(dataset)
+
+
+def test_default_stored_config_no_features(tmp_image_dir):
+    from iconoscope.commands import default_stored_config
+    from iconoscope.dataset import ImageDataset
+
+    dataset = ImageDataset.create(tmp_image_dir, tmp_image_dir / "data.h5")
+    with pytest.raises(SystemExit, match="No features in dataset"):
+        default_stored_config(dataset)
+
+
+def test_resolve_config_model_opts_not_defaulted(tmp_image_dir):
+    # if model options are specified, the single stored config is not used
+    from iconoscope.commands import resolve_config
+    from iconoscope.dataset import ImageDataset
+
+    dataset = ImageDataset.create(tmp_image_dir, tmp_image_dir / "data.h5")
+    save_test_features(dataset, EmbeddingConfig(AVAILABLE_MODELS["clip"]))
+    with pytest.raises(
+        SystemExit, match=f"No features for `{DEFAULT_MODEL.name}/grayscale`"
+    ):
+        resolve_config(dataset, no_model_args(grayscale=True))
 
 
 def test_cli_center_crop_100(tmp_path):
