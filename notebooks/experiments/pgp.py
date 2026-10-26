@@ -29,6 +29,22 @@ __generated_with = "0.25.1"
 app = marimo.App(width="full", app_title="PGP image explorer")
 
 
+@app.cell
+def _(mo):
+    mo.callout(
+        mo.md(r"""
+    Run this [notebook on molab](https://molab.marimo.io/github/github.com/princeton-cdh/iconoscope/blob/main/notebooks/experiments/pgp.py) :
+
+    - Click **Run it now** without saving (or **fork** if you want a copy you can modify).
+    - Switch to app view using the ::lucide:layout-template:: button in the bottom right menu.
+    - Start the notebook using the ::lucide:play:: button in the bottom right menu.  This may take a while: it has to install python dependencies and download the image dataset with precomputed embeddings.
+    - Once the dataset has loaded, you can interact with image dataset via UMAP or Nearest Neighbors.  Images are loaded via IIIF.
+    """),
+        kind="info",
+    )
+    return
+
+
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
@@ -106,7 +122,7 @@ def _(mo):
 
     Zoom in or pan around on the images to see in more detail; hover over an image to see the shelfmark it belongs to along with associated PGPID(s) and document types.
 
-    Click the full-screen arrows at the top right of the cell to expand the viewer and controls to use your entire screen.
+    Click the full-screen arrow button ::lucide:expand:: at the top right of the cell to expand the viewer and controls to use your entire screen.
     """)
     return
 
@@ -218,7 +234,7 @@ def _(
             mo.md(
                 "**Choose a starting image** — filters narrow the images "
                 "*Random image* picks from; neighbors are always searched "
-                "across the full dataset."
+                "across the full dataset. Use ::lucide:expand:: at right to make the viewer full screen."
             ),
             mo.hstack(
                 [
