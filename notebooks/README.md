@@ -81,6 +81,8 @@ and saved to the dataset file when the notebook loads it.
 
 ## PGP image explorer notebook (experimental)
 
+[![Open in molab](https://molab.marimo.io/molab-shield.svg)](https://molab.marimo.io/notebooks/nb_Te6qgNBef7iJ96qWvhgY2Q)
+
 > **Experimental:** this notebook is a work in progress, specific to the PGP
 > dataset, and may change or move.
 
