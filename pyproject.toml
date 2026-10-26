@@ -1,6 +1,6 @@
 [project]
 name = "iconoscope"
-version = "0.2.0"
+version = "0.3.0"
 description = "python package for exploring image collections using visual similarity based on image embeddings extracted from models"
 readme = "README.md"
 license = "Apache-2.0"
