@@ -14,6 +14,7 @@ Provides a command-line tool to work with image embeddings in a persistent, flex
   - HDF5 support saving features from multiple models and configurations in parallel.
 - **Mosaic** : generate a static mosaic from dataset images (or a subset); runs PCA and UMAP embeddings and then slots images into a grid
   - Uses UMAP coordinates for specified model and preprocessing options; generates and saves UMAP if not already present.
+  - Uses most frequent aspect ratio of the images in the dataset and uses that to determine best fit grid size.
 - **UMAP**: programmatically generate and save UMAP coordinates for any or all model features present in an image dataset file
 - **Cluster**: Run k-means with a specified K on a set of embeddings and save the results to the HDF5 file
 - **Info**: Report the contents of an iconoscope image dataset (number of image paths, extracted features, and any related UMAP coordinates or clustering)
