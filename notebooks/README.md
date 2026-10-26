@@ -102,11 +102,12 @@ needed to generate embeddings), so it can run in a sandbox:
 uvx marimo edit --sandbox notebooks/experiments/pgp.py
 ```
 
-By default it downloads a random sample of 500 PGP images with metadata
-(about 28 MB), extracted to `~/.cache/iconoscope/pgp-subset` on first use.
-To use other data, set one of these environment variables:
+By default it downloads the iconoscope dataset (`pgp_v2.h5`, embeddings
+only) and image metadata with IIIF urls (`image_meta_v2.parquet`) to
+`~/.cache/iconoscope/pgp-default` on first use, and loads images from IIIF.
+To use other data, set these environment variables:
 
-- `PGP_DATA_URL`: url or local path of a data tarball (delete the cache
-  directory to switch tarballs)
-- `PGP_DATA_DIR`: local directory with `pgp.h5`, `image_meta.csv`, and images
-  under `data/pgp-images/`
+- `PGP_DATASET_URL`, `PGP_IMAGE_META_URL`: override the download urls
+- `PGP_DATA_DIR`: local directory with the dataset and image metadata, and
+  optionally images under `data/pgp-images/`; override filenames with
+  `PGP_DATASET` and `PGP_IMAGE_META` (parquet)

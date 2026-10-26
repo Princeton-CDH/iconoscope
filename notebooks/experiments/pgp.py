@@ -1393,27 +1393,18 @@ def _(mo):
     metadata with IIIF urls (`image_meta_v2.parquet`) are downloaded to
     `~/.cache/iconoscope/pgp-default` on first use, and images are loaded from
     IIIF. Override the download urls with **`PGP_DATASET_URL`** and
-    **`PGP_IMAGE_META_URL`**, or use other data by setting one of these
-    environment variables before starting the notebook:
+    **`PGP_IMAGE_META_URL`**.
 
-    - **`PGP_DATA_URL`** — url (or local path) of a data tarball, e.g. the
-      sample subset made with `make_molab_subset.py`; downloaded and extracted to
-      `~/.cache/iconoscope/pgp-subset` on first use. To switch to a different
-      tarball, delete that directory.
-    - **`PGP_DATA_DIR`** — local directory with images under `data/pgp-images/`
-      and the dataset + image metadata files: `pgp.h5` and `image_meta.csv`, or
-      override the filenames with **`PGP_DATASET`** (e.g. `pgp_v2.h5`) and
-      **`PGP_IMAGE_META`** (e.g. `image_meta_v2.parquet`, which includes IIIF
-      image urls)
-
-    When the image metadata includes IIIF image urls, check *Use IIIF images* to
-    load images from the IIIF image server instead of local files.
+    To use local data instead, set **`PGP_DATA_DIR`** to a directory with the
+    dataset and image metadata files, and optionally images under
+    `data/pgp-images/`. Override the filenames with **`PGP_DATASET`** and
+    **`PGP_IMAGE_META`** (parquet). When local images are present, check
+    *Use IIIF images* to load them from the IIIF image server instead.
 
     For example:
 
     ```sh
-    PGP_DATA_URL=https://example.com/pgp-molab-subset.tar \
-      uvx marimo edit --sandbox pgp.py
+    PGP_DATA_DIR=~/data/pgp uvx marimo edit --sandbox pgp.py
     ```
 
     PGP document metadata is loaded from the
@@ -1493,12 +1484,10 @@ def _():
 @app.cell
 def _(Path, mo, urllib):
     import os
-    import tarfile
 
-    # default data, used when no data environment variables are set: the
-    # iconoscope dataset (embeddings, no images) and image metadata with IIIF
-    # urls, so images load from IIIF; both downloaded on first use.
-    # (confirm=t skips google drive's virus scan page for large files)
+    # default data: the iconoscope dataset (embeddings, no images) and image
+    # metadata with IIIF urls, so images load from IIIF; both downloaded on
+    # first use. (confirm=t skips google drive's virus scan page for large files)
     DEFAULT_DATASET_URL = (
         "https://drive.usercontent.google.com/download"
         "?id=14uVPRbLH3FdeACFoMolr0yTshvPeOA03&export=download&confirm=t"
@@ -1520,34 +1509,13 @@ def _(Path, mo, urllib):
         _tmp.rename(dest)
 
     # data location from environment variables; see "Data" section above
-    # PGP document metadata is always loaded from the pgp-metadata repo
+    dataset_name = os.environ.get("PGP_DATASET", "pgp_v2.h5")
+    image_meta_name = os.environ.get("PGP_IMAGE_META", "image_meta_v2.parquet")
     if os.environ.get("PGP_DATA_DIR"):
+        # local data, optionally with images under data/pgp-images/
         data_dir = Path(os.environ["PGP_DATA_DIR"]).expanduser()
-        # optional dataset / metadata filenames within the data dir
-        dataset_name = os.environ.get("PGP_DATASET", "pgp.h5")
-        image_meta_name = os.environ.get("PGP_IMAGE_META", "image_meta.csv")
-    elif os.environ.get("PGP_DATA_URL"):
-        _url = os.environ["PGP_DATA_URL"]
-        data_dir = Path.home() / ".cache" / "iconoscope" / "pgp-subset"
-        dataset_name = "pgp.h5"
-        image_meta_name = "image_meta.csv"
-        if not (data_dir / "pgp.h5").exists():
-            data_dir.mkdir(parents=True, exist_ok=True)
-            _tar_path = data_dir / "download.tar"
-            if Path(_url).expanduser().exists():
-                _tar_path = Path(_url).expanduser()
-            else:
-                urllib.request.urlretrieve(_url, _tar_path)
-            with tarfile.open(_tar_path) as _tar:
-                _tar.extractall(data_dir, filter="data")
-            if _tar_path.parent == data_dir:
-                _tar_path.unlink()
     else:
-        # default: separate dataset + image metadata downloads (urls can be
-        # overridden with PGP_DATASET_URL / PGP_IMAGE_META_URL)
         data_dir = Path.home() / ".cache" / "iconoscope" / "pgp-default"
-        dataset_name = "pgp_v2.h5"
-        image_meta_name = "image_meta_v2.parquet"
         _download(
             os.environ.get("PGP_DATASET_URL", DEFAULT_DATASET_URL),
             data_dir / dataset_name,
@@ -1556,6 +1524,7 @@ def _(Path, mo, urllib):
             os.environ.get("PGP_IMAGE_META_URL", DEFAULT_IMAGE_META_URL),
             data_dir / image_meta_name,
         )
+    # PGP document metadata is always loaded from the pgp-metadata repo
     documents_csv = (
         "https://github.com/princetongenizalab/pgp-metadata/raw/main/data/documents.csv"
     )
@@ -1582,29 +1551,8 @@ def _(ImageDataset, data_dir, dataset_name):
 
 @app.cell
 def _(data_dir, image_meta_path, pl):
-    # load image metadata (csv or parquet)
-    if image_meta_path.suffix == ".parquet":
-        # v2 metadata: clean columns, including IIIF image urls
-        image_meta_df = pl.read_parquet(image_meta_path)
-    else:
-        # TODO: this csv changes structure part way through and is not all of the files
-        image_meta_df = pl.read_csv(image_meta_path)
-        # fix swapped image_path / shelfmark columns
-        image_meta_df = (
-            image_meta_df.with_columns(
-                real_path=pl.when(pl.col.image_path.str.starts_with("data/pgp-"))
-                .then(pl.col.image_path)
-                .otherwise(pl.col.shelfmark),
-                real_shelfmark=pl.when(pl.col.image_path.str.starts_with("data/pgp-"))
-                .then(pl.col.shelfmark)
-                .otherwise(pl.col.image_path),
-            )
-            .drop("image_path", "shelfmark")
-            .rename({"real_path": "image_path", "real_shelfmark": "shelfmark"})
-        )
-    # IIIF image service url, when available (null otherwise)
-    if "iiif_image" not in image_meta_df.columns:
-        image_meta_df = image_meta_df.with_columns(iiif_image=pl.lit(None, pl.String))
+    # image metadata, including IIIF image service urls (null when unavailable)
+    image_meta_df = pl.read_parquet(image_meta_path)
     has_iiif = image_meta_df["iiif_image"].is_not_null().any()
     # without local image files (e.g. the default download), images can only
     # be shown from IIIF, so images without a IIIF url are filtered out
