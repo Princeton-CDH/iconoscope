@@ -536,7 +536,12 @@ def _(
     mosaic_download = mo.hstack(
         [_download_button]
         + (
-            [mo.md("*Filter by document type or keyword to download a mosaic*")]
+            [
+                mo.md(
+                    "*Filter by document type or keyword to download a mosaic "
+                    f"(up to {MOSAIC_MAX_IMAGES:,} images)*"
+                )
+            ]
             if not _filtered
             else [
                 mo.md(
@@ -1531,8 +1536,9 @@ def _():
     # (memory: ~3 bytes/px, so 16000 x 10000 is ~480 MB while rendering)
     MOSAIC_CELL_WIDTH = 250
     MOSAIC_MAX_WIDTH = 16000
-    # max images in a downloadable mosaic; limits load on IIIF servers
-    MOSAIC_MAX_IMAGES = 1000
+    # max images in a downloadable mosaic; uncached IIIF images take about a
+    # second each to fetch, so this keeps first downloads to several minutes
+    MOSAIC_MAX_IMAGES = 500
     # thumbnail resolution (max width in px); high enough to stay sharp when
     # zoomed into the plot, but each image is embedded in the page
     THUMB_PX = 400
