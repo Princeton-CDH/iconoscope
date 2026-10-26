@@ -55,16 +55,31 @@
   const fitLabel = document.createElement("label");
   fitLabel.append("thumbnails: ", fitMode);
   const resetZoom = document.createElement("button");
-  resetZoom.textContent = "reset zoom";
+  resetZoom.textContent = "⟲ Reset zoom";
   resetZoom.title = "scroll to zoom, drag to pan, double-click to reset";
-  // endpoint labels on either side of the slider
-  const endLabel = (text) => {
-    const s = document.createElement("span");
-    s.textContent = text;
-    s.style.color = "#666";
-    return s;
+  // explicit button styling, since host pages (e.g. marimo) may reset
+  // button styles so it reads as plain text
+  const styleButton = (b) => {
+    b.style.cssText =
+      "padding:3px 10px;border:1px solid #888;border-radius:4px;" +
+      "background:#f3f3f3;color:#222;font:13px sans-serif;cursor:pointer;" +
+      "box-shadow:0 1px 1px rgba(0,0,0,0.15)";
+    b.onmouseenter = () => (b.style.background = "#e2e2e2");
+    b.onmouseleave = () => (b.style.background = "#f3f3f3");
   };
-  controls.append(play, endLabel("UMAP"), slider, endLabel("Grid"), label, linesLabel);
+  styleButton(resetZoom);
+  // endpoint buttons on either side of the slider: click to animate to
+  // that view (handlers set below, with the animation)
+  const endButton = (text) => {
+    const b = document.createElement("button");
+    b.textContent = text;
+    b.title = `animate to ${text} view`;
+    styleButton(b);
+    return b;
+  };
+  const toUmap = endButton("UMAP");
+  const toGrid = endButton("Grid");
+  controls.append(play, toUmap, slider, toGrid, label, linesLabel);
   if (points.some((p) => p.img)) controls.append(fitLabel);
   controls.append(resetZoom);
   const holder = document.createElement("div");
@@ -310,6 +325,16 @@
     play.textContent = "⏸";
     raf = requestAnimationFrame(step);
   };
+  // animate toward one end (0 = UMAP, 1 = Grid) from the current position
+  const animateTo = (end) => {
+    stop();
+    if (+slider.value === end) return;
+    dir = end ? 1 : -1;
+    play.textContent = "⏸";
+    raf = requestAnimationFrame(step);
+  };
+  toUmap.onclick = () => animateTo(0);
+  toGrid.onclick = () => animateTo(1);
   slider.oninput = () => { stop(); draw(+slider.value); };
   lines.onchange = () => draw(+slider.value);
   fitMode.onchange = () => draw(+slider.value);
