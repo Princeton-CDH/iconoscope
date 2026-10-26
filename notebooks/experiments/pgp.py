@@ -29,19 +29,21 @@ __generated_with = "0.25.1"
 app = marimo.App(width="full", app_title="PGP image explorer")
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
-    mo.callout(
-        mo.md(r"""
+    mo.md(r"""
+    /// admonition | Run on molab
+        type: info
+
     Run this [notebook on molab](https://molab.marimo.io/github/github.com/princeton-cdh/iconoscope/blob/main/notebooks/experiments/pgp.py) :
 
     - Click **Run it now** without saving (or **fork** if you want a copy you can modify).
-    - Switch to app view using the ::lucide:layout-template:: button in the bottom right menu.
-    - Start the notebook using the ::lucide:play:: button in the bottom right menu.  This may take a while: it has to install python dependencies and download the image dataset with precomputed embeddings.
+    - Marimo will warn you that the notebook has not been verified. Click the **Run on Server** button.
+    - Once it has loaded, switch to app view using the ::lucide:layout-template:: button in the bottom right menu.
+    - Start the notebook using the ::lucide:play:: button in the bottom right menu.  It will take a while: it has to install python dependencies and then download the PGP image dataset with precomputed embeddings.
     - Once the dataset has loaded, you can interact with image dataset via UMAP or Nearest Neighbors.  Images are loaded via IIIF.
-    """),
-        kind="info",
-    )
+    ///
+    """)
     return
 
 
