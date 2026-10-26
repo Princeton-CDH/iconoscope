@@ -145,7 +145,7 @@ def _(
         umap_panel = mo.vstack(
             [
                 mo.image(
-                    image_src(_row, 600),
+                    image_src(_row),
                     style={"max-height": "300px", "max-width": "100%", "width": "auto"},
                 ),
                 mo.md(document_links_md(_row)).style({"font-size": "0.85em"}),
@@ -266,7 +266,7 @@ def _(
             [
                 mo.md("**Starting image**"),
                 mo.image(
-                    image_src(nn_image_df.row(nn_query_idx, named=True), 500),
+                    image_src(nn_image_df.row(nn_query_idx, named=True)),
                     style={
                         "height": "250px",
                         "width": "auto",
@@ -499,12 +499,14 @@ def _(
 @app.cell
 def _(
     MOSAIC_CELL_WIDTH,
+    MOSAIC_MAX_IMAGES,
     MOSAIC_MAX_WIDTH,
     doc_type_select,
     embedding_select,
     filtered_df,
     io,
     mo,
+    mosaic_image_paths,
     np,
     re,
     render_mosaic,
@@ -519,8 +521,11 @@ def _(
         _width = min(
             MOSAIC_MAX_WIDTH, round((filtered_df.height * _cell_area * 16 / 10) ** 0.5)
         )
+        # images without a local copy are fetched from IIIF (and cached);
+        # render_mosaic leaves failed images blank
+        _paths = mosaic_image_paths(filtered_df)
         _canvas = render_mosaic(
-            filtered_df["image_path"].to_list(),
+            [_p if _p is not None else "" for _p in _paths],
             filtered_df["umap"].to_numpy().astype(np.float32),
             _aspect,
             _width,
@@ -541,28 +546,108 @@ def _(
             + ".jpg"
         )
 
-    # only for a filtered set; the full dataset is too large for one image
+    # only for a filtered set of at most MOSAIC_MAX_IMAGES; the full dataset
+    # is too large for one image, and too many requests for IIIF servers
     _filtered = bool(doc_type_select.value or tag_select.value)
+    _too_many = filtered_df.height > MOSAIC_MAX_IMAGES
     _download_button = mo.download(
         data=_mosaic_jpeg,
         filename=_mosaic_filename,
         mimetype="image/jpeg",
-        disabled=not _filtered,
+        disabled=not _filtered or _too_many,
         label=f"Download mosaic ({filtered_df.height:,} images)",
     )
     # button, with a note beside it when disabled
     mosaic_download = mo.hstack(
         [_download_button]
         + (
-            []
-            if _filtered
-            else [mo.md("*Filter by document type or keyword to download a mosaic*")]
+            [mo.md("*Filter by document type or keyword to download a mosaic*")]
+            if not _filtered
+            else [
+                mo.md(
+                    f"*Mosaics are limited to {MOSAIC_MAX_IMAGES:,} images; "
+                    "narrow the filters to download*"
+                )
+            ]
+            if _too_many
+            else []
         ),
         justify="start",
         align="center",
         gap=0.5,
     )
     return (mosaic_download,)
+
+
+@app.cell
+def _(
+    THUMB_PX,
+    ThreadPoolExecutor,
+    as_completed,
+    data_dir,
+    iiif_url,
+    mo,
+    prefer_iiif,
+    re,
+    urllib,
+):
+    # local copies of IIIF images for the mosaic download, cached on disk so
+    # repeat downloads don't refetch; fetched politely: an identifying
+    # User-Agent, a few requests at a time, and one standard size
+    IIIF_CACHE_DIR = data_dir / "iiif-cache"
+    # the standard thumbnail width, so servers may have it cached already
+    IIIF_FETCH_WIDTH = THUMB_PX
+    IIIF_USER_AGENT = (
+        "iconoscope PGP notebook (https://github.com/Princeton-CDH/iconoscope)"
+    )
+
+    def iiif_local_copy(iiif, width=IIIF_FETCH_WIDTH):
+        """path to a cached local copy of a IIIF image at the given width,
+        downloading it if needed"""
+        _name = re.sub(r"[^A-Za-z0-9.-]+", "_", iiif.split("://", 1)[-1])
+        _dest = IIIF_CACHE_DIR / f"{_name}_{width}.jpg"
+        if not _dest.exists():
+            _dest.parent.mkdir(parents=True, exist_ok=True)
+            _req = urllib.request.Request(
+                iiif_url(iiif, width=width), headers={"User-Agent": IIIF_USER_AGENT}
+            )
+            with urllib.request.urlopen(_req, timeout=30) as _resp:
+                _data = _resp.read()
+            _tmp = _dest.with_name(_dest.name + ".part")
+            _tmp.write_bytes(_data)
+            _tmp.rename(_dest)
+        return _dest
+
+    def mosaic_image_paths(df, max_workers=4):
+        """image paths for a mosaic: local files when available and IIIF is
+        not preferred, otherwise cached IIIF copies (None if a fetch fails);
+        shows a progress bar while fetching"""
+        _rows = list(df.select("image_path", "iiif_image").iter_rows())
+
+        def _path(row):
+            _path_, _iiif = row
+            if not prefer_iiif(_path_, _iiif):
+                return _path_
+            try:
+                return iiif_local_copy(_iiif)
+            except Exception:
+                return None
+
+        with (
+            ThreadPoolExecutor(max_workers=max_workers) as _pool,
+            mo.status.progress_bar(
+                total=len(_rows),
+                title="Fetching mosaic images",
+                subtitle="first download only; cached afterwards",
+                remove_on_exit=True,
+            ) as _bar,
+        ):
+            _futures = [_pool.submit(_path, _r) for _r in _rows]
+            for _f in as_completed(_futures):
+                _bar.update()
+            return [_f.result() for _f in _futures]
+
+    return (mosaic_image_paths,)
 
 
 @app.cell
@@ -919,6 +1004,7 @@ def _(
 @app.cell
 def _(
     NeighborGrid,
+    THUMB_PX,
     iiif_url,
     image_data_uri,
     mo,
@@ -947,7 +1033,7 @@ def _(
                         {
                             "idx": _r["idx"],
                             "src": (
-                                iiif_url(_r["iiif_image"], height=_src_h)
+                                iiif_url(_r["iiif_image"], width=THUMB_PX)
                                 if prefer_iiif(_r["image_path"], _r["iiif_image"])
                                 else image_data_uri(_r["image_path"], _src_h)
                             ),
@@ -1001,7 +1087,7 @@ def _(
         nn_panel = mo.vstack(
             [
                 mo.image(
-                    image_src(_row, 600),
+                    image_src(_row),
                     style={"max-height": "300px", "max-width": "100%", "width": "auto"},
                 ),
                 mo.md(
@@ -1075,7 +1161,7 @@ def _(pl):
 
 
 @app.cell
-def _(IIIFImageClient, Path, data_dir, has_iiif, mo):
+def _(DETAIL_PX, IIIFImageClient, Path, data_dir, has_iiif, mo):
     # load images from the IIIF image server instead of local files, when
     # the metadata has IIIF urls (disabled otherwise); on by default when the
     # local image files aren't present
@@ -1098,11 +1184,11 @@ def _(IIIFImageClient, Path, data_dir, has_iiif, mo):
         IIIF is enabled or the local file is missing"""
         return bool(iiif) and (use_iiif.value or not Path(path).exists())
 
-    def image_src(row, height):
-        """IIIF url when enabled (or the local file is missing) and available
-        for this image, otherwise the local image path"""
+    def image_src(row, width=DETAIL_PX):
+        """IIIF url (at the given width) when enabled (or the local file is
+        missing) and available for this image, otherwise the local image path"""
         if prefer_iiif(row["image_path"], row.get("iiif_image")):
-            return iiif_url(row["iiif_image"], height=height)
+            return iiif_url(row["iiif_image"], width=width)
         return row["image_path"]
 
     return iiif_url, image_src, prefer_iiif, use_iiif
@@ -1316,6 +1402,8 @@ def _(anywidget, traitlets):
                 th.dataset.idx = t.idx;
                 th.title = t.title;
                 const img = document.createElement("img");
+                // only load thumbnails scrolled into view
+                img.loading = "lazy";
                 img.src = t.src;
                 img.style.height = h + "px";
                 th.appendChild(img);
@@ -1420,6 +1508,7 @@ def _():
     import io
     import re
     import urllib.request
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from pathlib import Path
 
     import anywidget
@@ -1446,19 +1535,26 @@ def _():
     # (memory: ~3 bytes/px, so 16000 x 10000 is ~480 MB while rendering)
     MOSAIC_CELL_WIDTH = 250
     MOSAIC_MAX_WIDTH = 16000
+    # max images in a downloadable mosaic; limits load on IIIF servers
+    MOSAIC_MAX_IMAGES = 1000
     # thumbnail resolution (max width in px); high enough to stay sharp when
     # zoomed into the plot, but each image is embedded in the page
-    THUMB_PX = 384
+    THUMB_PX = 400
+    # IIIF images are requested at only two widths, thumbnail (THUMB_PX) and
+    # detail, so servers are more likely to have them cached
+    DETAIL_PX = 800
     # space above the plot for the summary line and controls
     PLOT_CHROME = 64
     return (
         CANVAS_HEIGHT,
         CANVAS_WIDTH,
+        DETAIL_PX,
         IIIFImageClient,
         Image,
         ImageDataset,
         ImageOps,
         MOSAIC_CELL_WIDTH,
+        MOSAIC_MAX_IMAGES,
         MOSAIC_MAX_WIDTH,
         ObservablePlot,
         PLOT_CHROME,
@@ -1466,7 +1562,9 @@ def _():
         PLOT_MAX_WIDTH,
         Path,
         THUMB_PX,
+        ThreadPoolExecutor,
         anywidget,
+        as_completed,
         base64,
         functools,
         io,
