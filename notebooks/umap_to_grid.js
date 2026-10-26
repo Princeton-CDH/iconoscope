@@ -117,7 +117,7 @@
   // (`index` maps each element to its datum)
   const clickable = (index, scales, values, dimensions, context, next) => {
     const g = next(index, scales, values, dimensions, context);
-    g.querySelectorAll("image, circle").forEach((el, j) => {
+    g.querySelectorAll("image, circle, rect").forEach((el, j) => {
       const i = index[j];
       el.style.cursor = "pointer";
       el.addEventListener("click", (event) => {
@@ -130,6 +130,31 @@
     return g;
   };
 
+  // lazy thumbnails: an image is only loaded once its point is on screen
+  // (plot scrolled into view, within the zoomed region), and kept after
+  // that; until then the point is drawn as a colored placeholder.
+  // SVG images don't support loading="lazy", so this is done by hand.
+  const loaded = new Set();
+  let inView = false;
+  // add newly visible points to `loaded`; true if any were added
+  function loadVisible(pos) {
+    if (!useImg || !inView) return false;
+    // visible bounds in mosaic pixels, from the zoom transform, plus a
+    // cell of margin so images are ready as they scroll in
+    const toX = (px) => x0 + (px - zoomT.x) / zoomT.k / k;
+    const toY = (py) => y0 + (py - zoomT.y) / zoomT.k / k;
+    const [vx0, vx1] = [toX(0) - cellW, toX(plotW) + cellW];
+    const [vy0, vy1] = [toY(0) - cellH, toY(plotH) + cellH];
+    let added = false;
+    pos.forEach((p, i) => {
+      if (!loaded.has(i) && p.img && p.x >= vx0 && p.x <= vx1 && p.y >= vy0 && p.y <= vy1) {
+        loaded.add(i);
+        added = true;
+      }
+    });
+    return added;
+  }
+
   function draw(t) {
     const e = ease(t);
     const pos = points.map((p) => ({
@@ -137,6 +162,8 @@
       x: (1 - e) * p.sx + e * p.dx,
       y: (1 - e) * p.sy + e * p.dy,
     }));
+    loadVisible(pos);
+    pos.forEach((p, i) => { if (!loaded.has(i)) p.img = null; });
     const size = 0.25 + 0.75 * e;
     const marks = [
       // grid lines limited to the canvas (the plot may extend past it)
@@ -147,9 +174,18 @@
       marks.push(Plot.link(points, {
         x1: "sx", y1: "sy", x2: "dx", y2: "dy", stroke: "color", strokeOpacity: 0.4,
       }));
+    // placeholders for thumbnails not loaded yet (off screen)
+    if (useImg)
+      marks.push(Plot.rect(pos, {
+        filter: (p) => p.img === null,
+        x1: (p) => p.x - (cellW * size) / 2, x2: (p) => p.x + (cellW * size) / 2,
+        y1: (p) => p.y - (cellH * size) / 2, y2: (p) => p.y + (cellH * size) / 2,
+        fill: "color", fillOpacity: 0.5, title: "label",
+        ...(selectable ? { render: clickable } : {}),
+      }));
     marks.push(useImg
       ? Plot.image(pos, {
-          x: "x", y: "y", src: "img",
+          x: "x", y: "y", src: "img", filter: (p) => p.img !== null,
           width: cellPxW * size, height: cellPxH * size, title: "label",
           preserveAspectRatio: `xMidYMid ${fitMode.value}`,
           ...(selectable ? { render: clickable } : {}),
@@ -195,7 +231,9 @@
   }
   const zoom = d3.zoom()
     .scaleExtent([1, 40])
-    .on("zoom", (event) => { zoomT = event.transform; applyZoom(); });
+    .on("zoom", (event) => { zoomT = event.transform; applyZoom(); })
+    // after zooming/panning, load thumbnails that came into view
+    .on("end", () => redrawIfNewlyVisible());
   const sel = d3.select(holder).call(zoom).on("dblclick.zoom", null);
   holder.addEventListener("pointerdown", (event) => { downAt = [event.clientX, event.clientY]; }, true);
   const reset = () => sel.call(zoom.transform, d3.zoomIdentity);
@@ -303,6 +341,7 @@
     document.removeEventListener("webkitfullscreenchange", onFullscreen);
     window.removeEventListener("resize", onResize);
     if (ro) ro.disconnect();
+    if (io) io.disconnect();
     if (selectable) model.off("change:selected", onSelected);
   };
 
@@ -344,6 +383,29 @@
     if (!raf) draw(+slider.value);
   };
   if (selectable) model.on("change:selected", onSelected);
+  // redraw (when not animating; animation redraws every frame anyway) if
+  // more thumbnails are now visible
+  function redrawIfNewlyVisible() {
+    if (raf || !root.isConnected) return;
+    const e = ease(+slider.value);
+    const pos = points.map((p) => ({
+      ...p, x: (1 - e) * p.sx + e * p.dx, y: (1 - e) * p.sy + e * p.dy,
+    }));
+    if (loadVisible(pos)) draw(+slider.value);
+  }
+  // only load thumbnails once the plot is scrolled into view
+  let io = null;
+  if (useImg && typeof IntersectionObserver !== "undefined") {
+    io = new IntersectionObserver((entries) => {
+      if (!entries.some((en) => en.isIntersecting) || inView) return;
+      inView = true;
+      io.disconnect();
+      redrawIfNewlyVisible();
+    }, { rootMargin: "200px" });
+    io.observe(holder);
+  } else {
+    inView = true;
+  }
   // in Observable, stop animating when the cell re-runs (e.g. on resize)
   if (typeof invalidation !== "undefined") invalidation.then(() => { stop(); cleanup(); });
   layout();
