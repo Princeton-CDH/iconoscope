@@ -3,7 +3,7 @@
 # dependencies = [
 #     "anywidget",
 #     "h5py",
-#     "iconoscope @ git+https://github.com/Princeton-CDH/iconoscope@develop",
+#     "iconoscope==0.2",
 #     "marimo>=0.25.1",
 #     "numpy",
 #     "piffle",
@@ -439,15 +439,21 @@ def _(image_info_df, mo, pl, require_iiif, umap_df):
     if require_iiif:
         umap_meta_df = umap_meta_df.filter(pl.col.iiif_image.is_not_null())
     mo.md(
-        f"Metadata found for **{umap_meta_df['shelfmark'].is_not_null().sum()}** of {umap_meta_df.height} images; "
-        f"PGP document match for **{umap_meta_df['pgpids'].is_not_null().sum()}**"
+        f"Metadata found for **{umap_meta_df['shelfmark'].is_not_null().sum():,}** of {umap_meta_df.height:,} images; "
+        f"PGP document match for **{umap_meta_df['pgpids'].is_not_null().sum():,}**"
         + (
-            f"; {_total - umap_meta_df.height} images without IIIF urls excluded"
+            f"; {_total - umap_meta_df.height} images without IIIF urls excluded."
             if require_iiif
             else ""
         )
     )
     return (umap_meta_df,)
+
+
+@app.cell
+def _(umap_meta_df):
+    umap_meta_df
+    return
 
 
 @app.cell
@@ -1107,7 +1113,10 @@ def image_label(meta):
     """hover text for an image: whatever document metadata is available"""
     _lines = []
     if meta.get("shelfmark"):
-        _lines.append(meta["shelfmark"])
+        # include canvas label when present to distinguish between images in the same shelfmark
+        _lines.append(
+            " ".join([meta["shelfmark"], meta.get("canvas_label", "")]).strip()
+        )
     if meta.get("pgpids"):
         _lines.append("PGPID " + ", ".join(str(_p) for _p in meta["pgpids"]))
     if meta.get("doc_type"):
@@ -1136,7 +1145,11 @@ def _(pgp_meta_df, pl):
                     f"  \n  {_desc[:max_chars]}{'…' if len(_desc) > max_chars else ''}"
                 )
             _items.append(_item)
-        _head = f"**{meta.get('shelfmark') or 'No shelfmark match'}**"
+        # include canvas label when present to distinguish between images in the same shelfmark
+        image_label = " ".join(
+            [meta.get("shelfmark", ""), meta.get("canvas_label", "")]
+        ).strip()
+        _head = f"**{image_label or 'No shelfmark match'}**"
         return (
             _head
             + "\n\n"
@@ -1157,7 +1170,7 @@ def _(ObservablePlot, Path, mo, traitlets, urllib):
     else:
         with urllib.request.urlopen(
             "https://raw.githubusercontent.com/Princeton-CDH/iconoscope/"
-            "develop/notebooks/umap_to_grid.js"
+            "main/notebooks/umap_to_grid.js"
         ) as _resp:
             MORPH_JS = _resp.read().decode()
 
@@ -1615,9 +1628,9 @@ def _(documents_csv, pl):
 def _(image_meta_df, pgp_meta_df, pl):
     # one row per image (image_meta lists some images more than once), with
     # PGP document info attached by shelfmark
-    _img = image_meta_df.select("image_path", "shelfmark", "iiif_image").unique(
-        "image_path", keep="first"
-    )
+    _img = image_meta_df.select(
+        "image_path", "shelfmark", "iiif_image", "canvas_label"
+    ).unique("image_path", keep="first")
     _docs = (
         pgp_meta_df.with_columns(
             # tags are a comma-separated string per document
