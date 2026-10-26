@@ -114,8 +114,8 @@ def _(mo):
 @app.cell
 def _(
     controls_ui,
+    detail_image,
     document_links_md,
-    image_src,
     mo,
     mosaic_download,
     nn_image_df,
@@ -144,10 +144,7 @@ def _(
         )
         umap_panel = mo.vstack(
             [
-                mo.image(
-                    image_src(_row),
-                    style={"max-height": "300px", "max-width": "100%", "width": "auto"},
-                ),
+                detail_image(_row, "100%", "300px"),
                 mo.md(document_links_md(_row)).style({"font-size": "0.85em"}),
                 _search,
                 mo.md(
@@ -194,8 +191,8 @@ def _(mo):
 
 @app.cell
 def _(
+    detail_image,
     document_links_md,
-    image_src,
     mo,
     nn_candidates,
     nn_description_search,
@@ -265,14 +262,8 @@ def _(
         _query = mo.vstack(
             [
                 mo.md("**Starting image**"),
-                mo.image(
-                    image_src(nn_image_df.row(nn_query_idx, named=True)),
-                    style={
-                        "height": "250px",
-                        "width": "auto",
-                        "max-width": "300px",
-                        "object-fit": "contain",
-                    },
+                detail_image(
+                    nn_image_df.row(nn_query_idx, named=True), "300px", "250px"
                 ),
                 # same document details + links as the results panel
                 mo.md(
@@ -1056,8 +1047,8 @@ def _(
 
 @app.cell
 def _(
+    detail_image,
     document_links_md,
-    image_src,
     mo,
     nn_grid,
     nn_image_df,
@@ -1086,10 +1077,7 @@ def _(
         )
         nn_panel = mo.vstack(
             [
-                mo.image(
-                    image_src(_row),
-                    style={"max-height": "300px", "max-width": "100%", "width": "auto"},
-                ),
+                detail_image(_row, "100%", "300px"),
                 mo.md(
                     document_links_md(_row)
                     + "\n\n"
@@ -1191,7 +1179,22 @@ def _(DETAIL_PX, IIIFImageClient, Path, data_dir, has_iiif, mo):
             return iiif_url(row["iiif_image"], width=width)
         return row["image_path"]
 
-    return iiif_url, image_src, prefer_iiif, use_iiif
+    def detail_image(row, max_width, max_height):
+        """image for a details panel, sized from the stored aspect ratio
+        (width / height) so its space is reserved before it loads: as large as
+        fits within max_width x max_height (css lengths, e.g. "100%", "300px")"""
+        _ar = row["aspect_ratio"]
+        return mo.image(
+            image_src(row),
+            style={
+                "width": f"min({max_width}, {max_height} * {_ar:.4f})",
+                "aspect-ratio": f"{_ar:.4f}",
+                "height": "auto",
+                "object-fit": "contain",
+            },
+        )
+
+    return detail_image, iiif_url, prefer_iiif, use_iiif
 
 
 @app.function
