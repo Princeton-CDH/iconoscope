@@ -411,7 +411,7 @@ def _(embedding_select, img_dataset, mo):
 
 
 @app.cell
-def _(image_info_df, mo, pl, require_iiif, umap_df):
+def _(image_info_df, pl, require_iiif, umap_df):
     # attach metadata to dataset images; dataset paths are absolute, metadata
     # paths are relative to the experiment dir (data/pgp-images/...)
     umap_meta_df = (
@@ -425,26 +425,10 @@ def _(image_info_df, mo, pl, require_iiif, umap_df):
         )
         .drop("_rel_path")
     )
-    _total = umap_meta_df.height
     # without local images, only images with a IIIF url can be shown
     if require_iiif:
         umap_meta_df = umap_meta_df.filter(pl.col.iiif_image.is_not_null())
-    mo.md(
-        f"Metadata found for **{umap_meta_df['shelfmark'].is_not_null().sum():,}** of {umap_meta_df.height:,} images; "
-        f"PGP document match for **{umap_meta_df['pgpids'].is_not_null().sum():,}**"
-        + (
-            f"; {_total - umap_meta_df.height} images without IIIF urls excluded."
-            if require_iiif
-            else ""
-        )
-    )
     return (umap_meta_df,)
-
-
-@app.cell
-def _(umap_meta_df):
-    umap_meta_df
-    return
 
 
 @app.cell
@@ -744,6 +728,8 @@ def _(
     _size = (THUMB_PX, max(1, round(THUMB_PX / img_aspect)))
     _thumbs = []
     _errors = []
+    # IIIF thumbnails are only urls here; the browser loads them
+    _n_iiif = 0
     _placed_iiif = sample_df["iiif_image"].gather(np.flatnonzero(placed)).to_list()
     for _p, _iiif in mo.status.progress_bar(
         list(zip(_placed_paths, _placed_iiif)),
@@ -754,14 +740,21 @@ def _(
             if prefer_iiif(_p, _iiif):
                 # loaded by the browser; the plot crops to the cell
                 _thumbs.append(iiif_url(_iiif, width=THUMB_PX))
+                _n_iiif += 1
             else:
                 _thumbs.append(thumbnail_data_uri(_p, _size))
         except Exception as _exc:
             _thumbs.append(None)
             _errors.append(f"{_p}: {_exc}")
-    umap_thumb_status = (
-        f"Loaded **{sum(_t is not None for _t in _thumbs)}/{len(_thumbs)}** thumbnails."
-    )
+    _n_local = len(_thumbs) - _n_iiif
+    _status = []
+    if _n_local:
+        _status.append(
+            f"Loaded **{_n_local - len(_errors)}/{_n_local}** local thumbnails"
+        )
+    if _n_iiif:
+        _status.append(f"**{_n_iiif}** thumbnails from IIIF")
+    umap_thumb_status = "; ".join(_status) + "."
     if _errors:
         umap_thumb_status += f" First error: `{_errors[0]}`"
 
