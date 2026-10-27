@@ -696,7 +696,7 @@ wheels = [
 
 [[package]]
 name = "iconoscope"
-version = "0.3.0"
+version = "0.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "h5py" },
@@ -734,13 +734,18 @@ embed = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "iconoscope" },
+]
+notebooks = [
     { name = "altair" },
-    { name = "iconoscope", extra = ["all"] },
     { name = "marimo" },
     { name = "piffle" },
+    { name = "wigglystuff" },
+]
+test = [
+    { name = "iconoscope", extra = ["all"] },
     { name = "pytest" },
     { name = "pytest-cov" },
-    { name = "wigglystuff" },
 ]
 
 [package.metadata]
@@ -764,14 +769,17 @@ requires-dist = [
 provides-extras = ["embed", "analysis", "all"]
 
 [package.metadata.requires-dev]
-dev = [
+dev = [{ name = "iconoscope", extras = ["test", "notebooks"] }]
+notebooks = [
     { name = "altair", specifier = ">=6.3.0" },
-    { name = "iconoscope", extras = ["all"] },
     { name = "marimo", specifier = ">=0.25.1" },
     { name = "piffle", specifier = ">=0.9.0" },
+    { name = "wigglystuff", specifier = ">=0.5.36" },
+]
+test = [
+    { name = "iconoscope", extras = ["all"] },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "wigglystuff", specifier = ">=0.5.36" },
 ]
 
 [[package]]
