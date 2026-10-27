@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.2] 2026-10-27
+## [0.2.1] 2026-10-27
 
 In order to support installing this package and using iconoscope datasets in more
 environments (including WASM/pyodide) without requiring heavy python packages,
@@ -62,4 +62,4 @@ Provides a command line tool to embed a directory of images using pretrained vis
 [0.1]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.1
 [0.1.1]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.1.1
 [0.2]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.2
-[0.2.2]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.2.2
+[0.2.1]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.2.1
