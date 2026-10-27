@@ -256,6 +256,35 @@ print(f"{time.perf_counter() - started:.4f}")
     )
 
 
+@pytest.mark.parametrize(
+    "command,extra", [("embed", "embed"), ("umap", "analysis"), ("mosaic", "analysis")]
+)
+def test_missing_extra(command, extra):
+    # commands that need optional dependencies explain how to install them
+    args = argparse.Namespace(command=command)
+    with (
+        patch(
+            "iconoscope.cli.import_module",
+            side_effect=ModuleNotFoundError("No module named 'torch'", name="torch"),
+        ),
+        pytest.raises(SystemExit, match=rf"iconoscope\[{extra}\]"),
+    ):
+        cli.dispatch(args)
+
+
+def test_missing_module_no_extra():
+    # other import errors are not reported as missing extras
+    args = argparse.Namespace(command="info")
+    with (
+        patch(
+            "iconoscope.cli.import_module",
+            side_effect=ModuleNotFoundError("No module named 'h5py'", name="h5py"),
+        ),
+        pytest.raises(ModuleNotFoundError),
+    ):
+        cli.dispatch(args)
+
+
 ## custom size type for argparse to support specifying size as wxh
 
 

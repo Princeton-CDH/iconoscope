@@ -176,11 +176,30 @@ HANDLERS = {
 }
 
 
+#: optional dependency group (extra) required by each subcommand, if any
+COMMAND_EXTRAS = {
+    "embed": "embed",
+    "mosaic": "analysis",
+    "cluster": "analysis",
+    "umap": "analysis",
+}
+
+
 def dispatch(args: argparse.Namespace) -> None:
     # Import and run the specified subcommand with the specified arguments
     module_name, handler_name = HANDLERS[args.command]
-    handler = getattr(import_module(module_name), handler_name)
-    handler(args)
+    try:
+        module = import_module(module_name)
+    except ModuleNotFoundError as err:
+        # commands that need optional dependencies report how to install them
+        extra = COMMAND_EXTRAS.get(args.command)
+        if extra is None or (err.name or "").startswith("iconoscope"):
+            raise
+        sys.exit(
+            f"The {args.command} command requires optional dependencies "
+            f"(missing: {err.name}); install with: pip install 'iconoscope[{extra}]'"
+        )
+    getattr(module, handler_name)(args)
 
 
 def main():
