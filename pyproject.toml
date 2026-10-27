@@ -21,10 +21,10 @@ classifiers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "h5py>=3.16.0",
-    "numpy>=2.0",
+    "h5py>=3",
+    "numpy>=1.23",
     "pillow>=10.0",
-    "polars>=1.41.2",
+    "polars>=1",
 ]
 
 [project.optional-dependencies]
@@ -33,14 +33,14 @@ embed = [
     "accelerate>=1.14.0",
     "torch>=2.12.0",
     "torchvision>=0.27.0",
-    "tqdm>=4.68.2",
+    "tqdm>=4",
     "transformers>=5.12.1",
 ]
 # umap, clustering, and mosaics (umap, cluster, mosaic commands)
 analysis = [
-    "lap>=0.4",
-    "scikit-learn>=1.2",
-    "scipy>=1.14",
+    "lap>=0.5",
+    "scikit-learn>=1.6",
+    "scipy>=1.3.1",
     "tqdm>=4.68.2",
     "umap-learn>=0.5",
 ]
@@ -61,7 +61,7 @@ notebooks = [
     "piffle>=0.9.0",
     "wigglystuff>=0.5.36",
 ]
-dev = ["iconoscope[test,notebooks]"]
+dev = [{include-group = "test"}, {include-group = "notebooks"}]
 
 [build-system]
 requires = ["uv_build>=0.11.16,<0.12.0"]
