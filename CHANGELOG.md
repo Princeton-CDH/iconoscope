@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+- Heavy dependencies are now optional extras: `embed` (torch, transformers),
+  `analysis` (umap, scikit-learn, scipy, lap), and `all`. The base package
+  only needs h5py, numpy, pillow, and polars, so stored datasets can be loaded
+  in lightweight environments, including WASM/Pyodide. **To keep the full
+  0.2 functionality, install `iconoscope[all]`.**
+- CLI commands that need a missing extra report which extra to install.
+
 ## [0.2] 2026-10-26
 
 Complete rewrite of the package; uses `transformers` python library to use a consistent interface for loading and running models. HDF5 files from 0.1 are _not compatible_ with v0.2.

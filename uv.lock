@@ -699,12 +699,16 @@ name = "iconoscope"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [
-    { name = "accelerate" },
     { name = "h5py" },
-    { name = "lap" },
     { name = "numpy" },
     { name = "pillow" },
     { name = "polars" },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "accelerate" },
+    { name = "lap" },
     { name = "scikit-learn" },
     { name = "scipy" },
     { name = "torch" },
@@ -713,10 +717,25 @@ dependencies = [
     { name = "transformers" },
     { name = "umap-learn" },
 ]
+analysis = [
+    { name = "lap" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "tqdm" },
+    { name = "umap-learn" },
+]
+embed = [
+    { name = "accelerate" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "tqdm" },
+    { name = "transformers" },
+]
 
 [package.dev-dependencies]
 dev = [
     { name = "altair" },
+    { name = "iconoscope", extra = ["all"] },
     { name = "marimo" },
     { name = "piffle" },
     { name = "pytest" },
@@ -726,24 +745,28 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "accelerate", specifier = ">=1.14.0" },
+    { name = "accelerate", marker = "extra == 'embed'", specifier = ">=1.14.0" },
     { name = "h5py", specifier = ">=3.16.0" },
-    { name = "lap", specifier = ">=0.4" },
+    { name = "iconoscope", extras = ["embed", "analysis"], marker = "extra == 'all'" },
+    { name = "lap", marker = "extra == 'analysis'", specifier = ">=0.4" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "polars", specifier = ">=1.41.2" },
-    { name = "scikit-learn", specifier = ">=1.2" },
-    { name = "scipy", specifier = ">=1.14" },
-    { name = "torch", specifier = ">=2.12.0" },
-    { name = "torchvision", specifier = ">=0.27.0" },
-    { name = "tqdm", specifier = ">=4.68.2" },
-    { name = "transformers", specifier = ">=5.12.1" },
-    { name = "umap-learn", specifier = ">=0.5" },
+    { name = "scikit-learn", marker = "extra == 'analysis'", specifier = ">=1.2" },
+    { name = "scipy", marker = "extra == 'analysis'", specifier = ">=1.14" },
+    { name = "torch", marker = "extra == 'embed'", specifier = ">=2.12.0" },
+    { name = "torchvision", marker = "extra == 'embed'", specifier = ">=0.27.0" },
+    { name = "tqdm", marker = "extra == 'analysis'", specifier = ">=4.68.2" },
+    { name = "tqdm", marker = "extra == 'embed'", specifier = ">=4.68.2" },
+    { name = "transformers", marker = "extra == 'embed'", specifier = ">=5.12.1" },
+    { name = "umap-learn", marker = "extra == 'analysis'", specifier = ">=0.5" },
 ]
+provides-extras = ["embed", "analysis", "all"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "altair", specifier = ">=6.3.0" },
+    { name = "iconoscope", extras = ["all"] },
     { name = "marimo", specifier = ">=0.25.1" },
     { name = "piffle", specifier = ">=0.9.0" },
     { name = "pytest", specifier = ">=8.0" },
