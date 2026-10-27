@@ -1,13 +1,18 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.2] 2026-10-27
 
-- Heavy dependencies are now optional extras: `embed` (torch, transformers),
-  `analysis` (umap, scikit-learn, scipy, lap), and `all`. The base package
-  only needs h5py, numpy, pillow, and polars, so stored datasets can be loaded
-  in lightweight environments, including WASM/Pyodide. **To keep the full
-  0.2 functionality, install `iconoscope[all]`.**
-- CLI commands that need a missing extra report which extra to install.
+In order to support installing this package and using iconoscope datasets in more
+environments (including WASM/pyodide) without requiring heavy python packages,
+dependencies for generating embeddings and running an analysis are now optional.
+
+- New optional dependency groups:
+
+  - `iconoscope[embed]` for torch, transformers, needed for `embed` command
+  - `iconoscope[analysis]` for umap, scikit-learn, scipy, lap; needed for `mosaic`, `umap`, `cluster`
+  - Use `iconoscope[all]` to install all optional dependencies
+
+- CLI commands that need are missing a dependency report which extra group should be installed.
 
 ## [0.2] 2026-10-26
 
@@ -57,3 +62,4 @@ Provides a command line tool to embed a directory of images using pretrained vis
 [0.1]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.1
 [0.1.1]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.1.1
 [0.2]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.2
+[0.2.2]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.2.2
