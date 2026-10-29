@@ -91,7 +91,7 @@ def test_create_writes_schema_and_images(tmp_path: Path, store: DatasetStore):
         assert f.attrs["schema_version"] == StorageSchema.version
         img_grp = f["image"]
         assert img_grp.attrs["image_dir"] == str(tmp_path / "images")
-        assert img_grp["paths"][:].astype("T").tolist() == PATHS
+        assert img_grp["paths"].asstr()[:].tolist() == PATHS
         assert img_grp["sizes"][:].tolist() == [list(s) for s in SIZES]
         assert img_grp["paths"].compression == "gzip"
 

@@ -72,7 +72,7 @@ def test_create_stores_absolute_image_dir_and_relative_paths(
     with h5py.File(tmp_path / "data.h5", "r") as h5_file:
         img_grp = h5_file["image"]
         assert img_grp.attrs["image_dir"] == str(tmp_image_dir.resolve())
-        stored = img_grp["paths"][:].astype("T").tolist()
+        stored = img_grp["paths"].asstr()[:].tolist()
         assert stored == sorted(p.name for p in tmp_image_dir.glob("*.jpg"))
 
     # loaded paths are absolute and usable from any working directory
