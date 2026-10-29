@@ -10,12 +10,23 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test:
-    name: Run unit tests (Python ${{ matrix.python-version }})
+    name: Run unit tests (Python ${{ matrix.python-version }}, ${{ matrix.resolution }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
+        resolution: ["locked"]
+        sync-args: ["--locked"]
+        include:
+          # oldest supported python with minimum declared direct dependencies
+          - python-version: "3.12"
+            resolution: "lowest-direct"
+            sync-args: "--resolution lowest-direct"
+          # newest supported python with latest available dependencies
+          - python-version: "3.14"
+            resolution: "highest"
+            sync-args: "--resolution highest --upgrade"
     steps:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -28,9 +39,9 @@ jobs:
       - name: Install Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
       - name: Install dependencies
-        run: uv sync --group test --python ${{ matrix.python-version }}
+        run: uv sync --group test --python ${{ matrix.python-version }} ${{ matrix.sync-args }}
       - name: Run tests with coverage
-        run: uv run --python ${{ matrix.python-version }} pytest --cov=iconoscope --cov-report=term-missing --cov-report=xml
+        run: uv run --no-sync --python ${{ matrix.python-version }} pytest --cov=iconoscope --cov-report=term-missing --cov-report=xml
       - name: Upload coverage report
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
