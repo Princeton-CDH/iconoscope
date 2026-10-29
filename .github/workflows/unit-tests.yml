@@ -8,6 +8,9 @@ permissions:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+env:
+  # python version used for reporting coverage to codecov (locked resolution only)
+  COVERAGE_PYTHON_VERSION: "3.14"
 jobs:
   test:
     name: Run unit tests (Python ${{ matrix.python-version }}, ${{ matrix.resolution }})
@@ -43,6 +46,7 @@ jobs:
       - name: Run tests with coverage
         run: uv run --no-sync --python ${{ matrix.python-version }} pytest --cov=iconoscope --cov-report=term-missing --cov-report=xml
       - name: Upload coverage report
+        if: matrix.python-version == env.COVERAGE_PYTHON_VERSION && matrix.resolution == 'locked'
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           files: coverage.xml
