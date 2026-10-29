@@ -805,7 +805,7 @@ requires-dist = [
     { name = "h5py", specifier = ">=3.11" },
     { name = "iconoscope", extras = ["embed", "analysis"], marker = "extra == 'all'" },
     { name = "lap", marker = "extra == 'analysis'", specifier = ">=0.5" },
-    { name = "numpy", specifier = ">=2.3" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "polars", specifier = ">=1.30" },
     { name = "scikit-learn", marker = "extra == 'analysis'", specifier = ">=1.6" },
