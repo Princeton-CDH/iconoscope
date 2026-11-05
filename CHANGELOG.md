@@ -2,6 +2,8 @@
 
 ## [0.2.2] 2026-11-05
 
+_Published as `iconoscope` v0.2.2.post1 on PyPI due to an out-of-order release that was yanked._
+
 - Updated dependency versions for compatibility:
   - Support lower versions where possible for better interoperability with other packages and environments (including pyodide/WASM).
     - Now supports `h5py>=3.11` (previously `>=3.16`), `polars>=1.30` (previously `>=1.41.2`)
