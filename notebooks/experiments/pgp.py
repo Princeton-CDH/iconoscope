@@ -221,6 +221,7 @@ def _(
     nn_model_picker,
     nn_neighbors,
     nn_panel,
+    nn_pick,
     nn_query_idx,
     nn_random_button,
     nn_selected_models,
@@ -247,9 +248,18 @@ def _(
                 ],
                 justify="start",
             ),
-            mo.md(
-                f"**{nn_candidates.height:,}** of {nn_image_df.height:,} images "
-                "match the filters"
+            mo.hstack(
+                [
+                    mo.md(
+                        f"**{nn_candidates.height:,}** of {nn_image_df.height:,} images "
+                        "match the filters"
+                    ),
+                    *([nn_pick] if nn_pick is not None else []),
+                ],
+                justify="start",
+                align="center",
+                gap=1,
+                wrap=True,
             ),
         ]
     )
@@ -961,6 +971,10 @@ def _(
     # so the filters stay visible
     if _chosen is not None and _chosen[1] == nn_start_token:
         nn_query_idx = _chosen[0]
+    elif nn_candidates.height and nn_shelfmark_search.value.strip():
+        # shelfmark search: first match, so recto comes before verso
+        # (images are in shelfmark + canvas order)
+        nn_query_idx = int(nn_candidates["idx"][0])
     elif nn_candidates.height:
         nn_query_idx = int(
             nn_candidates["idx"][int(np.random.randint(nn_candidates.height))]
@@ -968,6 +982,28 @@ def _(
     else:
         nn_query_idx = None
     return nn_candidates, nn_query_idx, nn_start_token
+
+
+@app.cell
+def _(mo, nn_candidates, nn_query_idx, nn_set_start, nn_start_token):
+    # when only a few images match, choose the starting image directly by label
+    NN_MAX_PICKS = 12
+    _picks = {
+        " ".join([_r["shelfmark"] or "", _r["canvas_label"] or ""]).strip()
+        or str(_r["idx"]): int(_r["idx"])
+        for _r in nn_candidates.iter_rows(named=True)
+    }
+    nn_pick = (
+        mo.ui.radio(
+            options=_picks,
+            value=next((_l for _l, _i in _picks.items() if _i == nn_query_idx), None),
+            inline=True,
+            on_change=lambda _i: nn_set_start((_i, nn_start_token)),
+        )
+        if 1 < nn_candidates.height <= NN_MAX_PICKS
+        else None
+    )
+    return (nn_pick,)
 
 
 @app.cell
