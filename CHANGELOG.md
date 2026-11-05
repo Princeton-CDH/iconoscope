@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.2] 2026-11-05
+
+- Updated dependency versions for compatibility:
+  - Support lower versions where possible for better interoperability with other packages and environments (including pyodide/WASM).
+    - Now supports `h5py>=3.11` (previously `>=3.16`), `polars>=1.30` (previously `>=1.41.2`)
+  - Raise minimum versions of selected analysis dependencies for compatibility with supported Python versions and lowest-direct dependency installation.
+- Bugfix for loading image paths from HDF5 files with numpy 2.0–2.2 (decode explicitly).
+- Unit test build matrix now includes lowest-direct resolution on Python 3.12 and highest on Python 3.14.
+- Images in the README have been updated with absolute links to GitHub assets for display on PyPI.
+
 ## [0.2.1] 2026-10-27
 
 In order to support installing this package and using iconoscope datasets in more
@@ -63,3 +73,4 @@ Provides a command line tool to embed a directory of images using pretrained vis
 [0.1.1]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.1.1
 [0.2]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.2
 [0.2.1]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.2.1
+[0.2.2]: https://github.com/Princeton-CDH/iconoscope/releases/tag/0.2.2
