@@ -25,7 +25,7 @@
 
 import marimo
 
-__generated_with = "0.25.1"
+__generated_with = "0.25.2"
 app = marimo.App(width="full", app_title="PGP image explorer")
 
 
@@ -229,8 +229,8 @@ def _(
     nn_tag_select,
     nn_thumb_size,
 ):
-    # filters and controls, then query image (with document metadata below)
-    # and model picker next to the neighbors, in one output, so everything is visible in fullscreen
+    # filters and controls, then in one row: query image (with document
+    # metadata and model picker below) | selected neighbor | neighbors, in one output, so everything is visible in fullscreen
     _filter_ui = mo.vstack(
         [
             mo.md(
@@ -315,7 +315,7 @@ def _(
                 f"for {len(nn_neighbors)} model configuration"
                 f"{'' if len(nn_neighbors) == 1 else 's'}"
             ),
-            # starting image and model picker to the left of the neighbor rows
+            # starting image (with model picker) | selected neighbor | neighbor rows
             mo.hstack(
                 [
                     mo.vstack(
@@ -329,10 +329,12 @@ def _(
                         align="start",
                         # keep its natural width (no shrinking under the results)
                     ).style({"flex": "none", "max-width": "420px"}),
+                    # details + links for the clicked thumbnail, next to the start
+                    mo.vstack(
+                        [mo.md("**Selected neighbor**"), nn_panel], align="start"
+                    ).style({"flex": "none", "width": "320px"}),
                     # results take the remaining width; rows scroll individually
                     mo.vstack([_results]).style({"flex": "1 1 0", "min-width": "0"}),
-                    # details + links for the clicked thumbnail
-                    mo.vstack([nn_panel]).style({"flex": "none", "width": "320px"}),
                 ],
                 justify="start",
                 align="start",
