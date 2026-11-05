@@ -38,7 +38,7 @@ embed = [
 ]
 # umap, clustering, and mosaics (umap, cluster, mosaic commands)
 analysis = [
-    "lap>=0.5",
+    "lap>=0.4",
     "scikit-learn>=1.6",
     "scipy>=1.15",
     "tqdm>=4.68.2",
