@@ -115,6 +115,19 @@ def test_image_reads(tmp_path: Path, store: DatasetStore):
     assert df["aspect_ratio"].to_list() == [32 / 24, 0.5]
 
 
+def test_unicode_image_paths_round_trip(tmp_path: Path):
+    image_dir = tmp_path / "画像"
+    paths = ["café.jpg", "子目录/画像.png"]
+    path = tmp_path / "data.h5"
+    DatasetStore.create(path, image_dir, paths, SIZES)
+
+    # Reopen the file to exercise decoding persisted UTF-8 paths.
+    store = DatasetStore(path)
+    expected = [image_dir / p for p in paths]
+    assert store.image_paths() == expected
+    assert store.image_data()["image_path"].to_list() == [str(p) for p in expected]
+
+
 def test_open_reuses_file(store: DatasetStore):
     with store.open() as opened:
         assert opened is store
