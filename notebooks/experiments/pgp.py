@@ -305,10 +305,22 @@ def _(
         _results = mo.callout(mo.md("Select at least one model."), kind="warn")
     else:
         # neighbors per model, or all neighbors combined in one table
+        # selected neighbor details | neighbor rows (scroll individually)
+        _grid = mo.hstack(
+            [
+                mo.vstack(
+                    [mo.md("**Selected neighbor**"), nn_panel], align="start"
+                ).style({"flex": "none", "width": "320px"}),
+                mo.vstack([nn_grid]).style({"flex": "1 1 0", "min-width": "0"}),
+            ],
+            justify="start",
+            align="start",
+            gap=1,
+        )
         _results = (
-            nn_grid
+            _grid
             if nn_table is None
-            else mo.ui.tabs({"Grid": nn_grid, "Table": nn_table})
+            else mo.ui.tabs({"Grid": _grid, "Table": nn_table})
         )
 
     mo.vstack(
@@ -332,7 +344,7 @@ def _(
                 f"for {len(nn_neighbors)} model configuration"
                 f"{'' if len(nn_neighbors) == 1 else 's'}"
             ),
-            # starting image (with model picker) | selected neighbor | neighbor rows
+            # starting image (with model picker) | results tabs
             mo.hstack(
                 [
                     mo.vstack(
@@ -346,11 +358,7 @@ def _(
                         align="start",
                         # keep its natural width (no shrinking under the results)
                     ).style({"flex": "none", "max-width": "420px"}),
-                    # details + links for the clicked thumbnail, next to the start
-                    mo.vstack(
-                        [mo.md("**Selected neighbor**"), nn_panel], align="start"
-                    ).style({"flex": "none", "width": "320px"}),
-                    # results take the remaining width; rows scroll individually
+                    # results take the remaining width
                     mo.vstack([_results]).style({"flex": "1 1 0", "min-width": "0"}),
                 ],
                 justify="start",
