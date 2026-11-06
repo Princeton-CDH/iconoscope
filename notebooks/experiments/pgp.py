@@ -342,7 +342,9 @@ def _(
             mo.md(
                 f"Nearest neighbors across all **{nn_image_df.height:,}** images, "
                 f"for {len(nn_neighbors)} model configuration"
-                f"{'' if len(nn_neighbors) == 1 else 's'}"
+                f"{'' if len(nn_neighbors) == 1 else 's'}: "
+                f"**{len({_i for _df in nn_neighbors.values() for _i in _df['idx']}):,}** "
+                "unique images returned"
             ),
             # starting image (with model picker) | results tabs
             mo.hstack(
