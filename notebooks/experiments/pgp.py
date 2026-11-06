@@ -215,6 +215,7 @@ def _(
     nn_candidates,
     nn_description_search,
     nn_doc_type_select,
+    nn_exclude_same_doc,
     nn_grid,
     nn_image_df,
     nn_k,
@@ -224,12 +225,19 @@ def _(
     nn_pick,
     nn_query_idx,
     nn_random_button,
+    nn_result_allowed,
+    nn_result_doc_types,
+    nn_result_mode,
+    nn_result_reset,
+    nn_result_tags,
+    nn_result_text,
     nn_selected_models,
     nn_shelfmark_search,
     nn_show_captions,
     nn_table,
     nn_tag_select,
     nn_thumb_size,
+    nn_viewable,
 ):
     # filters and controls, then in one row: query image (with document
     # metadata and model picker below) | selected neighbor | neighbors, in one output, so everything is visible in fullscreen
@@ -237,8 +245,8 @@ def _(
         [
             mo.md(
                 "**Choose a starting image** — filters narrow the images "
-                "*Random image* picks from; neighbors are always searched "
-                "across the full dataset. Use ::lucide:expand:: at right to make the viewer full screen."
+                "*Random image* picks from; neighbors are searched across "
+                "the full dataset, or as limited by the result filters below. Use ::lucide:expand:: at right to make the viewer full screen."
             ),
             mo.hstack(
                 [
@@ -255,6 +263,7 @@ def _(
                         f"**{nn_candidates.height:,}** of {nn_image_df.height:,} images "
                         "match the filters"
                     ),
+                    nn_random_button,
                     *([nn_pick] if nn_pick is not None else []),
                 ],
                 justify="start",
@@ -313,6 +322,14 @@ def _(
         )
     if nn_query_idx is not None and not nn_selected_models:
         _results = mo.callout(mo.md("Select at least one model."), kind="warn")
+    elif nn_neighbors and all(_df.height == 0 for _df in nn_neighbors.values()):
+        _results = mo.callout(
+            mo.md(
+                "No images match the result filters. "
+                "Adjust or reset the result filters to see neighbors."
+            ),
+            kind="warn",
+        )
     else:
         # neighbors per model, or all neighbors combined in one table
         # selected neighbor details | neighbor rows (scroll individually)
@@ -336,10 +353,10 @@ def _(
     mo.vstack(
         [
             _filter_ui,
+            mo.md("---"),
             # display controls in one row, to leave vertical space for results
             mo.hstack(
                 [
-                    nn_random_button,
                     nn_k,
                     nn_thumb_size,
                     nn_show_captions,
@@ -349,9 +366,28 @@ def _(
                 align="center",
                 gap=2,
             ),
+            mo.hstack(
+                [
+                    nn_result_mode,
+                    nn_result_doc_types,
+                    nn_result_tags,
+                    nn_result_text,
+                    nn_exclude_same_doc,
+                    nn_result_reset,
+                ],
+                justify="start",
+                align="center",
+                gap=1,
+                wrap=True,
+            ),
             mo.md(
-                f"Nearest neighbors across all **{nn_image_df.height:,}** images, "
-                f"for {len(nn_neighbors)} model configuration"
+                (
+                    f"Nearest neighbors across all **{int((nn_viewable & nn_result_allowed).sum()):,}** images, "
+                    if nn_result_allowed.all()
+                    else f"Nearest neighbors across **{int((nn_viewable & nn_result_allowed).sum()):,}** "
+                    f"of {int(nn_viewable.sum()):,} images (result filters applied), "
+                )
+                + f"for {len(nn_neighbors)} model configuration"
                 f"{'' if len(nn_neighbors) == 1 else 's'}: "
                 f"**{len({_i for _df in nn_neighbors.values() for _i in _df['idx']}):,}** "
                 "unique images returned"
@@ -878,16 +914,48 @@ def _(doc_type_options, img_dataset, mo, tag_options):
         label="Description", placeholder="search descriptions"
     )
     nn_shelfmark_search = mo.ui.text(label="Shelfmark", placeholder="e.g. T-S Ar.52")
+    # clears the result filters (re-creates them with default values)
+    nn_result_reset = mo.ui.button(label="Reset result filters")
     return (
         nn_description_search,
         nn_doc_type_select,
         nn_k,
         nn_models,
         nn_random_button,
+        nn_result_reset,
         nn_shelfmark_search,
         nn_show_captions,
         nn_tag_select,
         nn_thumb_size,
+    )
+
+
+@app.cell
+def _(doc_type_options, mo, nn_result_reset, tag_options):
+    nn_result_reset
+    # filters for the returned neighbors; applied before picking the top k, so
+    # grid and table both show k matching (or k non-excluded) images;
+    # referencing the reset button re-creates them with default values
+    nn_result_mode = mo.ui.radio(
+        options=["exclude", "include only"],
+        value="exclude",
+        inline=True,
+        label="Result filter",
+    )
+    nn_result_doc_types = mo.ui.multiselect(
+        options=doc_type_options, label="Document type"
+    )
+    nn_result_tags = mo.ui.multiselect(options=tag_options, label="Keywords")
+    nn_result_text = mo.ui.text(label="Description", placeholder="text to match")
+    nn_exclude_same_doc = mo.ui.checkbox(
+        value=False, label="Exclude images from the starting image's documents"
+    )
+    return (
+        nn_exclude_same_doc,
+        nn_result_doc_types,
+        nn_result_mode,
+        nn_result_tags,
+        nn_result_text,
     )
 
 
@@ -1048,6 +1116,7 @@ def _(
     nn_k,
     nn_model_picker,
     nn_query_idx,
+    nn_result_allowed,
     nn_viewable,
     np,
     pl,
@@ -1065,9 +1134,9 @@ def _(
         _feats = nn_features[_name]
         _sims = _feats @ _feats[nn_query_idx]
         _sims[nn_query_idx] = -np.inf
-        _sims[~nn_viewable] = -np.inf
-        _k = nn_k.value
-        _top = np.argpartition(-_sims, _k)[:_k]
+        _sims[~(nn_viewable & nn_result_allowed)] = -np.inf
+        _k = min(nn_k.value, int(np.isfinite(_sims).sum()))
+        _top = np.argpartition(-_sims, _k)[:_k] if _k else np.array([], dtype=int)
         _top = _top[np.argsort(-_sims[_top])]
         nn_neighbors[_name] = pl.DataFrame(
             {"idx": _top, "rank": np.arange(1, _k + 1), "similarity": _sims[_top]}
@@ -1919,6 +1988,53 @@ def _(image_meta_df, pgp_meta_df, pl):
     )
     image_info_df = _img.join(_docs, on="shelfmark", how="left")
     return (image_info_df,)
+
+
+@app.cell
+def _(
+    nn_exclude_same_doc,
+    nn_image_df,
+    nn_query_idx,
+    nn_result_doc_types,
+    nn_result_mode,
+    nn_result_tags,
+    nn_result_text,
+    np,
+    pl,
+):
+    # neighbors allowed by the result filters (on top of nn_viewable)
+    _df = nn_image_df
+    _text = nn_result_text.value.strip()
+    _conds = []
+    if nn_result_doc_types.value:
+        _conds.append(pl.col.doc_type.is_in(nn_result_doc_types.value))
+    if nn_result_tags.value:
+        _conds.append(
+            pl.col.tags.list.eval(pl.element().is_in(nn_result_tags.value)).list.any()
+        )
+    if _text:
+        _conds.append(
+            pl.col.description.str.contains(_text, literal=True, strict=False)
+        )
+    if _conds:
+        # match any of the active criteria
+        _match = _df.select(pl.any_horizontal(_conds).fill_null(False))
+        _match = _match.to_series().to_numpy()
+        nn_result_allowed = ~_match if nn_result_mode.value == "exclude" else _match
+    else:
+        nn_result_allowed = np.ones(_df.height, dtype=bool)
+    if nn_exclude_same_doc.value and nn_query_idx is not None:
+        _ids = nn_image_df["pgpids"][nn_query_idx].to_list() or []
+        nn_result_allowed = nn_result_allowed & ~(
+            _df.select(
+                pl.col.pgpids.list.eval(pl.element().is_in(_ids))
+                .list.any()
+                .fill_null(False)
+            )
+            .to_series()
+            .to_numpy()
+        )
+    return (nn_result_allowed,)
 
 
 if __name__ == "__main__":
