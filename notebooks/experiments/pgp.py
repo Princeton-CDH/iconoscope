@@ -1115,15 +1115,7 @@ def _(
 
 
 @app.cell
-def _(
-    THUMB_PX,
-    iiif_url,
-    mo,
-    nn_image_df,
-    nn_neighbors,
-    pl,
-    prefer_iiif,
-):
+def _(THUMB_PX, iiif_url, mo, nn_image_df, nn_neighbors, pl, prefer_iiif):
     def _thumb_value(row):
         # IIIF image url, which marimo tables show as a thumbnail (larger on
         # hover); local path when not using IIIF
@@ -1175,7 +1167,7 @@ def _(
                 maintain_order="left",
             )
             .with_columns(
-                image=pl.concat_str(
+                label=pl.concat_str(
                     [
                         pl.col.shelfmark.fill_null(""),
                         pl.col.canvas_label.fill_null(""),
@@ -1184,13 +1176,13 @@ def _(
                 ).str.strip_chars(),
                 pgpids=pl.col.pgpids.cast(pl.List(pl.String)).list.join(", "),
                 keywords=pl.col.tags.list.join(", "),
-                thumbnail=pl.struct("image_path", "iiif_image").map_elements(
+                image=pl.struct("image_path", "iiif_image").map_elements(
                     _thumb_value, return_dtype=pl.String
                 ),
             )
             .select(
-                "thumbnail",
                 "image",
+                "label",
                 pl.col.doc_type.alias("type"),
                 "pgpids",
                 "description",
@@ -1224,6 +1216,10 @@ def _(
             ),
             page_size=10,
             column_widths={
+                "image": 130,
+                "label": 110,
+                "type": 130,
+                "pgpids": 70,
                 "#1s": 35,
                 "ranks": 130,
                 "models": 50,
@@ -1231,9 +1227,15 @@ def _(
                 "best": 40,
                 "sim": 40,
                 "keywords": 130,
-                "description": 230,
             },
-            wrapped_columns=["description", "ranks", "keywords"],
+            wrapped_columns=[
+                "label",
+                "type",
+                "pgpids",
+                "description",
+                "ranks",
+                "keywords",
+            ],
         )
     else:
         nn_table = None
