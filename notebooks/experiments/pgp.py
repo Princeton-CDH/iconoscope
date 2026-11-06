@@ -940,15 +940,16 @@ def _(doc_type_options, mo, nn_result_reset, tag_options):
         options=["exclude", "include only"],
         value="exclude",
         inline=True,
-        label="Result filter",
+        label="Filter results",
     )
     nn_result_doc_types = mo.ui.multiselect(
         options=doc_type_options, label="Document type"
     )
     nn_result_tags = mo.ui.multiselect(options=tag_options, label="Keywords")
-    nn_result_text = mo.ui.text(label="Description", placeholder="text to match")
+    nn_result_text = mo.ui.text(label="Description", placeholder="search descriptions")
     nn_exclude_same_doc = mo.ui.checkbox(
-        value=False, label="Exclude images from the starting image's documents"
+        value=False,
+        label="Exclude images from the same documents as the starting image",
     )
     return (
         nn_exclude_same_doc,
