@@ -2007,15 +2007,26 @@ def _(
     _df = nn_image_df
     _text = nn_result_text.value.strip()
     _conds = []
+    # document type: any of the image's documents has a selected type
     if nn_result_doc_types.value:
-        _conds.append(pl.col.doc_type.is_in(nn_result_doc_types.value))
+        _conds.append(
+            pl.col.doc_types.list.set_intersection(nn_result_doc_types.value).list.len()
+            > 0
+        )
+    # keywords: image's documents share at least one selected PGP tag
     if nn_result_tags.value:
         _conds.append(
-            pl.col.tags.list.eval(pl.element().is_in(nn_result_tags.value)).list.any()
+            pl.col.tags.list.set_intersection(
+                pl.lit(nn_result_tags.value, dtype=pl.List(pl.String))
+            ).list.len()
+            > 0
         )
+    # description: case-insensitive substring match on document descriptions
     if _text:
         _conds.append(
-            pl.col.description.str.contains(_text, literal=True, strict=False)
+            pl.col.description.str.to_lowercase().str.contains(
+                _text.lower(), literal=True
+            )
         )
     if _conds:
         # match any of the active criteria
@@ -2024,13 +2035,17 @@ def _(
         nn_result_allowed = ~_match if nn_result_mode.value == "exclude" else _match
     else:
         nn_result_allowed = np.ones(_df.height, dtype=bool)
+    # same document: always excludes images sharing a PGP id with the starting image
     if nn_exclude_same_doc.value and nn_query_idx is not None:
         _ids = nn_image_df["pgpids"][nn_query_idx].to_list() or []
         nn_result_allowed = nn_result_allowed & ~(
             _df.select(
-                pl.col.pgpids.list.eval(pl.element().is_in(_ids))
-                .list.any()
-                .fill_null(False)
+                (
+                    pl.col.pgpids.list.set_intersection(
+                        pl.lit(_ids, dtype=nn_image_df.schema["pgpids"])
+                    ).list.len()
+                    > 0
+                ).fill_null(False)
             )
             .to_series()
             .to_numpy()
