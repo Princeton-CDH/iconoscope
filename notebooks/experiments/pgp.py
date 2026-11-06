@@ -308,7 +308,7 @@ def _(
         _results = (
             nn_grid
             if nn_table is None
-            else mo.ui.tabs({"By model": nn_grid, "Combined table": nn_table})
+            else mo.ui.tabs({"Grid": nn_grid, "Table": nn_table})
         )
 
     mo.vstack(
@@ -1232,6 +1232,17 @@ def _(
                 else {}
             ),
             page_size=10,
+            column_widths={
+                "#1s": 35,
+                "ranks": 130,
+                "models": 50,
+                "avg": 35,
+                "best": 40,
+                "sim": 40,
+                "keywords": 130,
+                "description": 230,
+            },
+            wrapped_columns=["description", "ranks", "keywords"],
         )
     else:
         nn_table = None
