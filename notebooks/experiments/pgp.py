@@ -290,10 +290,20 @@ def _(
     else:
         _query = mo.vstack(
             [
-                mo.md("**Starting image**"),
-                detail_image(
-                    nn_image_df.row(nn_query_idx, named=True), "300px", "250px"
+                mo.md("**Starting image**").style(
+                    {"width": "100%", "text-align": "center"}
                 ),
+                # centered in the column
+                mo.hstack(
+                    [
+                        detail_image(
+                            nn_image_df.row(nn_query_idx, named=True),
+                            "320px",
+                            "300px",
+                        )
+                    ],
+                    justify="center",
+                ).style({"width": "100%"}),
                 # same document details + links as the results panel
                 mo.md(
                     document_links_md(nn_image_df.row(nn_query_idx, named=True))
@@ -359,7 +369,15 @@ def _(
                         ],
                         align="start",
                         # keep its natural width (no shrinking under the results)
-                    ).style({"flex": "none", "max-width": "420px"}),
+                    ).style(
+                        {
+                            "flex": "none",
+                            "max-width": "420px",
+                            # offset by the grid/table tab bar so the starting
+                            # image lines up with the selected neighbor
+                            "margin-top": "0" if nn_table is None else "3.2rem",
+                        }
+                    ),
                     # results take the remaining width
                     mo.vstack([_results]).style({"flex": "1 1 0", "min-width": "0"}),
                 ],
