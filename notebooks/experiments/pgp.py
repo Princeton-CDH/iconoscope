@@ -1108,10 +1108,8 @@ def _(
 
 @app.cell
 def _(
-    DETAIL_PX,
     THUMB_PX,
     iiif_url,
-    image_data_uri,
     mo,
     nn_image_df,
     nn_neighbors,
@@ -1119,17 +1117,11 @@ def _(
     prefer_iiif,
 ):
     def _thumb_value(row):
-        # stored value (what downloads get): an IMAGE() formula, which Google
-        # Sheets and Excel show as an image, or the local path without IIIF
+        # IIIF image url, which marimo tables show as a thumbnail (larger on
+        # hover); local path when not using IIIF
         if prefer_iiif(row["image_path"], row["iiif_image"]):
-            return f'=IMAGE("{iiif_url(row["iiif_image"], width=THUMB_PX)}")'
+            return iiif_url(row["iiif_image"], width=THUMB_PX)
         return row["image_path"]
-
-    def _thumb_display(value):
-        # displayed in the table: same image sources as the results grid
-        if value.startswith("=IMAGE("):
-            return mo.image(value[len('=IMAGE("') : -len('")')], height=60)
-        return mo.image(image_data_uri(value, 250), height=60)
 
     # one row per unique image returned by any shown model, ordered by number
     # of 1st-place ranks, then number of models returning it, then mean rank
@@ -1187,17 +1179,11 @@ def _(
                 thumbnail=pl.struct("image_path", "iiif_image").map_elements(
                     _thumb_value, return_dtype=pl.String
                 ),
-                # plain link, for spreadsheet apps without IMAGE() (e.g. Numbers)
-                image_url=pl.col.iiif_image.map_elements(
-                    lambda _iiif: iiif_url(_iiif, width=DETAIL_PX),
-                    return_dtype=pl.String,
-                ),
             )
             .select(
                 "thumbnail",
                 "image",
-                "image_url",
-                "doc_type",
+                pl.col.doc_type.alias("type"),
                 "pgpids",
                 "description",
                 "keywords",
@@ -1219,9 +1205,6 @@ def _(
             format_mapping={
                 "avg": "{:.1f}",
                 "sim": "{:.3f}",
-                # image source shown as a small thumbnail
-                "thumbnail": _thumb_display,
-                "image_url": lambda _u: mo.md(f"[link]({_u})") if _u else "",
             },
             text_justify_columns={
                 _c: "right" for _c in ["#1s", "models", "best", "avg", "sim"]
