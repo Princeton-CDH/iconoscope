@@ -227,6 +227,7 @@ def _(
     nn_selected_models,
     nn_shelfmark_search,
     nn_show_captions,
+    nn_table,
     nn_tag_select,
     nn_thumb_size,
 ):
@@ -304,6 +305,14 @@ def _(
         _results = mo.callout(mo.md("Select at least one model."), kind="warn")
     else:
         _results = nn_grid
+
+    def _layout(*args, **kwargs):
+        # images view, with the results table as a second tab when available
+        _images = mo.hstack(*args, **kwargs)
+        if nn_table is None:
+            return _images
+        return mo.ui.tabs({"Images": _images, "Table": nn_table})
+
     mo.vstack(
         [
             _filter_ui,
@@ -325,8 +334,9 @@ def _(
                 f"for {len(nn_neighbors)} model configuration"
                 f"{'' if len(nn_neighbors) == 1 else 's'}"
             ),
-            # starting image (with model picker) | selected neighbor | neighbor rows
-            mo.hstack(
+            # starting image (with model picker) | selected neighbor | neighbor rows,
+            # or the results table in a second tab (same space, full width)
+            _layout(
                 [
                     mo.vstack(
                         [
@@ -1097,6 +1107,98 @@ def _(
         )
     )
     return (nn_grid,)
+
+
+@app.cell
+def _(mo, nn_image_df, nn_neighbors, pl):
+    # one row per unique image returned by any shown model, ordered by number
+    # of 1st-place ranks, then number of models returning it, then mean rank
+    if nn_neighbors:
+        _all = pl.concat(
+            [
+                _df.select("idx", "rank", "similarity").with_columns(
+                    model=pl.lit(_name)
+                )
+                for _name, _df in nn_neighbors.items()
+            ]
+        )
+        _summary = (
+            _all.group_by("idx")
+            .agg(
+                n_first=(pl.col("rank") == 1).sum(),
+                n_models=pl.len(),
+                best_rank=pl.col("rank").min(),
+                mean_rank=pl.col("rank").mean().round(2),
+                max_similarity=pl.col("similarity").max().round(3),
+                ranks=pl.format("{} #{}", "model", "rank").str.join("; "),
+            )
+            .sort(
+                ["n_first", "n_models", "mean_rank"],
+                descending=[True, True, False],
+            )
+        )
+        _table_df = (
+            _summary.join(
+                nn_image_df.select(
+                    "idx",
+                    "shelfmark",
+                    "canvas_label",
+                    "doc_type",
+                    "pgpids",
+                    "description",
+                    "tags",
+                ),
+                on="idx",
+                how="left",
+                maintain_order="left",
+            )
+            .with_columns(
+                image=pl.concat_str(
+                    [
+                        pl.col.shelfmark.fill_null(""),
+                        pl.col.canvas_label.fill_null(""),
+                    ],
+                    separator=" ",
+                ).str.strip_chars(),
+                pgpids=pl.col.pgpids.cast(pl.List(pl.String)).list.join(", "),
+                keywords=pl.col.tags.list.join(", "),
+            )
+            .select(
+                "image",
+                "doc_type",
+                "pgpids",
+                "description",
+                "keywords",
+                # rank fields last, with short names to keep columns narrow
+                pl.col.n_first.alias("#1s"),
+                pl.col.n_models.alias("models"),
+                pl.col.best_rank.alias("best"),
+                pl.col.mean_rank.alias("avg"),
+                pl.col.max_similarity.alias("sim"),
+                "ranks",
+            )
+        )
+        _rank_cols = {"#1s", "models", "best", "avg", "sim", "ranks"}
+        nn_table = mo.ui.table(
+            _table_df,
+            selection=None,
+            show_download=True,
+            show_column_summaries=False,
+            format_mapping={"avg": "{:.1f}", "sim": "{:.3f}"},
+            text_justify_columns={
+                _c: "right" for _c in ["#1s", "models", "best", "avg", "sim"]
+            },
+            style_cell=lambda _row, _col, _val: (
+                {"font-size": "0.75rem", "padding": "0 4px"}
+                if _col in _rank_cols
+                else {}
+            ),
+            page_size=10,
+        )
+    else:
+        nn_table = None
+    # displayed (collapsed) with the similarity search, so it's in fullscreen
+    return (nn_table,)
 
 
 @app.cell
