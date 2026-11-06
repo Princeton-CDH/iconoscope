@@ -304,14 +304,12 @@ def _(
     if nn_query_idx is not None and not nn_selected_models:
         _results = mo.callout(mo.md("Select at least one model."), kind="warn")
     else:
-        _results = nn_grid
-
-    def _layout(*args, **kwargs):
-        # images view, with the results table as a second tab when available
-        _images = mo.hstack(*args, **kwargs)
-        if nn_table is None:
-            return _images
-        return mo.ui.tabs({"Images": _images, "Table": nn_table})
+        # neighbors per model, or all neighbors combined in one table
+        _results = (
+            nn_grid
+            if nn_table is None
+            else mo.ui.tabs({"By model": nn_grid, "Combined table": nn_table})
+        )
 
     mo.vstack(
         [
@@ -334,9 +332,8 @@ def _(
                 f"for {len(nn_neighbors)} model configuration"
                 f"{'' if len(nn_neighbors) == 1 else 's'}"
             ),
-            # starting image (with model picker) | selected neighbor | neighbor rows,
-            # or the results table in a second tab (same space, full width)
-            _layout(
+            # starting image (with model picker) | selected neighbor | neighbor rows
+            mo.hstack(
                 [
                     mo.vstack(
                         [
@@ -1110,7 +1107,30 @@ def _(
 
 
 @app.cell
-def _(mo, nn_image_df, nn_neighbors, pl):
+def _(
+    DETAIL_PX,
+    THUMB_PX,
+    iiif_url,
+    image_data_uri,
+    mo,
+    nn_image_df,
+    nn_neighbors,
+    pl,
+    prefer_iiif,
+):
+    def _thumb_value(row):
+        # stored value (what downloads get): an IMAGE() formula, which Google
+        # Sheets and Excel show as an image, or the local path without IIIF
+        if prefer_iiif(row["image_path"], row["iiif_image"]):
+            return f'=IMAGE("{iiif_url(row["iiif_image"], width=THUMB_PX)}")'
+        return row["image_path"]
+
+    def _thumb_display(value):
+        # displayed in the table: same image sources as the results grid
+        if value.startswith("=IMAGE("):
+            return mo.image(value[len('=IMAGE("') : -len('")')], height=60)
+        return mo.image(image_data_uri(value, 250), height=60)
+
     # one row per unique image returned by any shown model, ordered by number
     # of 1st-place ranks, then number of models returning it, then mean rank
     if nn_neighbors:
@@ -1141,6 +1161,8 @@ def _(mo, nn_image_df, nn_neighbors, pl):
             _summary.join(
                 nn_image_df.select(
                     "idx",
+                    "image_path",
+                    "iiif_image",
                     "shelfmark",
                     "canvas_label",
                     "doc_type",
@@ -1162,9 +1184,19 @@ def _(mo, nn_image_df, nn_neighbors, pl):
                 ).str.strip_chars(),
                 pgpids=pl.col.pgpids.cast(pl.List(pl.String)).list.join(", "),
                 keywords=pl.col.tags.list.join(", "),
+                thumbnail=pl.struct("image_path", "iiif_image").map_elements(
+                    _thumb_value, return_dtype=pl.String
+                ),
+                # plain link, for spreadsheet apps without IMAGE() (e.g. Numbers)
+                image_url=pl.col.iiif_image.map_elements(
+                    lambda _iiif: iiif_url(_iiif, width=DETAIL_PX),
+                    return_dtype=pl.String,
+                ),
             )
             .select(
+                "thumbnail",
                 "image",
+                "image_url",
                 "doc_type",
                 "pgpids",
                 "description",
@@ -1184,7 +1216,13 @@ def _(mo, nn_image_df, nn_neighbors, pl):
             selection=None,
             show_download=True,
             show_column_summaries=False,
-            format_mapping={"avg": "{:.1f}", "sim": "{:.3f}"},
+            format_mapping={
+                "avg": "{:.1f}",
+                "sim": "{:.3f}",
+                # image source shown as a small thumbnail
+                "thumbnail": _thumb_display,
+                "image_url": lambda _u: mo.md(f"[link]({_u})") if _u else "",
+            },
             text_justify_columns={
                 _c: "right" for _c in ["#1s", "models", "best", "avg", "sim"]
             },
