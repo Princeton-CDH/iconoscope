@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+No changes to the core package.
+
+### Notebooks
+
+- Improvements to PGP Image explorer kNN interface and functionality:
+  - Place selected neighbor image next to starting image
+  - Add a tabular view of unique neighbors with metadata and images
+  - For small starting image sets, use the first and allow users to select
+  - Add options to filter results (include or exclude)
+
 ## [0.2.2] 2026-11-05
 
 _Published as `iconoscope` v0.2.2.post1 on PyPI due to an out-of-order release that was yanked._
