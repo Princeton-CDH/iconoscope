@@ -25,7 +25,7 @@
 
 import marimo
 
-__generated_with = "0.25.1"
+__generated_with = "0.25.2"
 app = marimo.App(width="full", app_title="PGP image explorer")
 
 
@@ -215,28 +215,38 @@ def _(
     nn_candidates,
     nn_description_search,
     nn_doc_type_select,
+    nn_exclude_same_doc,
     nn_grid,
     nn_image_df,
     nn_k,
     nn_model_picker,
     nn_neighbors,
     nn_panel,
+    nn_pick,
     nn_query_idx,
     nn_random_button,
+    nn_result_allowed,
+    nn_result_doc_types,
+    nn_result_mode,
+    nn_result_reset,
+    nn_result_tags,
+    nn_result_text,
     nn_selected_models,
     nn_shelfmark_search,
     nn_show_captions,
+    nn_table,
     nn_tag_select,
     nn_thumb_size,
+    nn_viewable,
 ):
-    # filters and controls, then query image (with document metadata below)
-    # and model picker next to the neighbors, in one output, so everything is visible in fullscreen
+    # filters and controls, then in one row: query image (with document
+    # metadata and model picker below) | selected neighbor | neighbors, in one output, so everything is visible in fullscreen
     _filter_ui = mo.vstack(
         [
             mo.md(
                 "**Choose a starting image** — filters narrow the images "
-                "*Random image* picks from; neighbors are always searched "
-                "across the full dataset. Use ::lucide:expand:: at right to make the viewer full screen."
+                "*Random image* picks from; neighbors are searched across "
+                "the full dataset, or as limited by the result filters below. Use ::lucide:expand:: at right to make the viewer full screen."
             ),
             mo.hstack(
                 [
@@ -247,9 +257,19 @@ def _(
                 ],
                 justify="start",
             ),
-            mo.md(
-                f"**{nn_candidates.height:,}** of {nn_image_df.height:,} images "
-                "match the filters"
+            mo.hstack(
+                [
+                    mo.md(
+                        f"**{nn_candidates.height:,}** of {nn_image_df.height:,} images "
+                        "match the filters"
+                    ),
+                    nn_random_button,
+                    *([nn_pick] if nn_pick is not None else []),
+                ],
+                justify="start",
+                align="center",
+                gap=1,
+                wrap=True,
             ),
         ]
     )
@@ -279,10 +299,20 @@ def _(
     else:
         _query = mo.vstack(
             [
-                mo.md("**Starting image**"),
-                detail_image(
-                    nn_image_df.row(nn_query_idx, named=True), "300px", "250px"
+                mo.md("**Starting image**").style(
+                    {"width": "100%", "text-align": "center"}
                 ),
+                # centered in the column
+                mo.hstack(
+                    [
+                        detail_image(
+                            nn_image_df.row(nn_query_idx, named=True),
+                            "320px",
+                            "300px",
+                        )
+                    ],
+                    justify="center",
+                ).style({"width": "100%"}),
                 # same document details + links as the results panel
                 mo.md(
                     document_links_md(nn_image_df.row(nn_query_idx, named=True))
@@ -292,15 +322,41 @@ def _(
         )
     if nn_query_idx is not None and not nn_selected_models:
         _results = mo.callout(mo.md("Select at least one model."), kind="warn")
+    elif nn_neighbors and all(_df.height == 0 for _df in nn_neighbors.values()):
+        _results = mo.callout(
+            mo.md(
+                "No images match the result filters. "
+                "Adjust or reset the result filters to see neighbors."
+            ),
+            kind="warn",
+        )
     else:
-        _results = nn_grid
+        # neighbors per model, or all neighbors combined in one table
+        # selected neighbor details | neighbor rows (scroll individually)
+        _grid = mo.hstack(
+            [
+                mo.vstack(
+                    [mo.md("**Selected neighbor**"), nn_panel], align="start"
+                ).style({"flex": "none", "width": "320px"}),
+                mo.vstack([nn_grid]).style({"flex": "1 1 0", "min-width": "0"}),
+            ],
+            justify="start",
+            align="start",
+            gap=1,
+        )
+        _results = (
+            _grid
+            if nn_table is None
+            else mo.ui.tabs({"Grid": _grid, "Table": nn_table})
+        )
+
     mo.vstack(
         [
             _filter_ui,
+            mo.md("---"),
             # display controls in one row, to leave vertical space for results
             mo.hstack(
                 [
-                    nn_random_button,
                     nn_k,
                     nn_thumb_size,
                     nn_show_captions,
@@ -310,12 +366,33 @@ def _(
                 align="center",
                 gap=2,
             ),
-            mo.md(
-                f"Nearest neighbors across all **{nn_image_df.height:,}** images, "
-                f"for {len(nn_neighbors)} model configuration"
-                f"{'' if len(nn_neighbors) == 1 else 's'}"
+            mo.hstack(
+                [
+                    nn_result_mode,
+                    nn_result_doc_types,
+                    nn_result_tags,
+                    nn_result_text,
+                    nn_exclude_same_doc,
+                    nn_result_reset,
+                ],
+                justify="start",
+                align="center",
+                gap=1,
+                wrap=True,
             ),
-            # starting image and model picker to the left of the neighbor rows
+            mo.md(
+                (
+                    f"Nearest neighbors across all **{int((nn_viewable & nn_result_allowed).sum()):,}** images, "
+                    if nn_result_allowed.all()
+                    else f"Nearest neighbors across **{int((nn_viewable & nn_result_allowed).sum()):,}** "
+                    f"of {int(nn_viewable.sum()):,} images (result filters applied), "
+                )
+                + f"for {len(nn_neighbors)} model configuration"
+                f"{'' if len(nn_neighbors) == 1 else 's'}: "
+                f"**{len({_i for _df in nn_neighbors.values() for _i in _df['idx']}):,}** "
+                "unique images returned"
+            ),
+            # starting image (with model picker) | results tabs
             mo.hstack(
                 [
                     mo.vstack(
@@ -328,11 +405,17 @@ def _(
                         ],
                         align="start",
                         # keep its natural width (no shrinking under the results)
-                    ).style({"flex": "none", "max-width": "420px"}),
-                    # results take the remaining width; rows scroll individually
+                    ).style(
+                        {
+                            "flex": "none",
+                            "max-width": "420px",
+                            # offset by the grid/table tab bar so the starting
+                            # image lines up with the selected neighbor
+                            "margin-top": "0" if nn_table is None else "3.2rem",
+                        }
+                    ),
+                    # results take the remaining width
                     mo.vstack([_results]).style({"flex": "1 1 0", "min-width": "0"}),
-                    # details + links for the clicked thumbnail
-                    mo.vstack([nn_panel]).style({"flex": "none", "width": "320px"}),
                 ],
                 justify="start",
                 align="start",
@@ -831,16 +914,49 @@ def _(doc_type_options, img_dataset, mo, tag_options):
         label="Description", placeholder="search descriptions"
     )
     nn_shelfmark_search = mo.ui.text(label="Shelfmark", placeholder="e.g. T-S Ar.52")
+    # clears the result filters (re-creates them with default values)
+    nn_result_reset = mo.ui.button(label="Reset result filters")
     return (
         nn_description_search,
         nn_doc_type_select,
         nn_k,
         nn_models,
         nn_random_button,
+        nn_result_reset,
         nn_shelfmark_search,
         nn_show_captions,
         nn_tag_select,
         nn_thumb_size,
+    )
+
+
+@app.cell
+def _(doc_type_options, mo, nn_result_reset, tag_options):
+    nn_result_reset
+    # filters for the returned neighbors; applied before picking the top k, so
+    # grid and table both show k matching (or k non-excluded) images;
+    # referencing the reset button re-creates them with default values
+    nn_result_mode = mo.ui.radio(
+        options=["exclude", "include only"],
+        value="exclude",
+        inline=True,
+        label="Filter results",
+    )
+    nn_result_doc_types = mo.ui.multiselect(
+        options=doc_type_options, label="Document type"
+    )
+    nn_result_tags = mo.ui.multiselect(options=tag_options, label="Keywords")
+    nn_result_text = mo.ui.text(label="Description", placeholder="search descriptions")
+    nn_exclude_same_doc = mo.ui.checkbox(
+        value=False,
+        label="Exclude images from the same documents as the starting image",
+    )
+    return (
+        nn_exclude_same_doc,
+        nn_result_doc_types,
+        nn_result_mode,
+        nn_result_tags,
+        nn_result_text,
     )
 
 
@@ -959,6 +1075,10 @@ def _(
     # so the filters stay visible
     if _chosen is not None and _chosen[1] == nn_start_token:
         nn_query_idx = _chosen[0]
+    elif nn_candidates.height and nn_shelfmark_search.value.strip():
+        # shelfmark search: first match, so recto comes before verso
+        # (images are in shelfmark + canvas order)
+        nn_query_idx = int(nn_candidates["idx"][0])
     elif nn_candidates.height:
         nn_query_idx = int(
             nn_candidates["idx"][int(np.random.randint(nn_candidates.height))]
@@ -969,12 +1089,35 @@ def _(
 
 
 @app.cell
+def _(mo, nn_candidates, nn_query_idx, nn_set_start, nn_start_token):
+    # when only a few images match, choose the starting image directly by label
+    NN_MAX_PICKS = 12
+    _picks = {
+        " ".join([_r["shelfmark"] or "", _r["canvas_label"] or ""]).strip()
+        or str(_r["idx"]): int(_r["idx"])
+        for _r in nn_candidates.iter_rows(named=True)
+    }
+    nn_pick = (
+        mo.ui.radio(
+            options=_picks,
+            value=next((_l for _l, _i in _picks.items() if _i == nn_query_idx), None),
+            inline=True,
+            on_change=lambda _i: nn_set_start((_i, nn_start_token)),
+        )
+        if 1 < nn_candidates.height <= NN_MAX_PICKS
+        else None
+    )
+    return (nn_pick,)
+
+
+@app.cell
 def _(
     nn_features,
     nn_image_df,
     nn_k,
     nn_model_picker,
     nn_query_idx,
+    nn_result_allowed,
     nn_viewable,
     np,
     pl,
@@ -992,9 +1135,9 @@ def _(
         _feats = nn_features[_name]
         _sims = _feats @ _feats[nn_query_idx]
         _sims[nn_query_idx] = -np.inf
-        _sims[~nn_viewable] = -np.inf
-        _k = nn_k.value
-        _top = np.argpartition(-_sims, _k)[:_k]
+        _sims[~(nn_viewable & nn_result_allowed)] = -np.inf
+        _k = min(nn_k.value, int(np.isfinite(_sims).sum()))
+        _top = np.argpartition(-_sims, _k)[:_k] if _k else np.array([], dtype=int)
         _top = _top[np.argsort(-_sims[_top])]
         nn_neighbors[_name] = pl.DataFrame(
             {"idx": _top, "rank": np.arange(1, _k + 1), "similarity": _sims[_top]}
@@ -1059,6 +1202,135 @@ def _(
         )
     )
     return (nn_grid,)
+
+
+@app.cell
+def _(THUMB_PX, iiif_url, mo, nn_image_df, nn_neighbors, pl, prefer_iiif):
+    def _thumb_value(row):
+        # IIIF image url, which marimo tables show as a thumbnail (larger on
+        # hover); local path when not using IIIF
+        if prefer_iiif(row["image_path"], row["iiif_image"]):
+            return iiif_url(row["iiif_image"], width=THUMB_PX)
+        return row["image_path"]
+
+    # one row per unique image returned by any shown model, ordered by number
+    # of 1st-place ranks, then number of models returning it, then mean rank
+    if nn_neighbors:
+        _all = pl.concat(
+            [
+                _df.select("idx", "rank", "similarity").with_columns(
+                    model=pl.lit(_name)
+                )
+                for _name, _df in nn_neighbors.items()
+            ]
+        )
+        _summary = (
+            _all.group_by("idx")
+            .agg(
+                n_first=(pl.col("rank") == 1).sum(),
+                n_models=pl.len(),
+                best_rank=pl.col("rank").min(),
+                mean_rank=pl.col("rank").mean().round(2),
+                max_similarity=pl.col("similarity").max().round(3),
+                ranks=pl.format("{} #{}", "model", "rank").str.join("; "),
+            )
+            .sort(
+                ["n_first", "n_models", "mean_rank"],
+                descending=[True, True, False],
+            )
+        )
+        _table_df = (
+            _summary.join(
+                nn_image_df.select(
+                    "idx",
+                    "image_path",
+                    "iiif_image",
+                    "shelfmark",
+                    "canvas_label",
+                    "doc_type",
+                    "pgpids",
+                    "description",
+                    "tags",
+                ),
+                on="idx",
+                how="left",
+                maintain_order="left",
+            )
+            .with_columns(
+                label=pl.concat_str(
+                    [
+                        pl.col.shelfmark.fill_null(""),
+                        pl.col.canvas_label.fill_null(""),
+                    ],
+                    separator=" ",
+                ).str.strip_chars(),
+                pgpids=pl.col.pgpids.cast(pl.List(pl.String)).list.join(", "),
+                keywords=pl.col.tags.list.join(", "),
+                image=pl.struct("image_path", "iiif_image").map_elements(
+                    _thumb_value, return_dtype=pl.String
+                ),
+            )
+            .select(
+                "image",
+                "label",
+                pl.col.doc_type.alias("type"),
+                "pgpids",
+                "description",
+                "keywords",
+                # rank fields last, with short names to keep columns narrow
+                pl.col.n_first.alias("#1s"),
+                pl.col.n_models.alias("models"),
+                pl.col.best_rank.alias("best"),
+                pl.col.mean_rank.alias("avg"),
+                pl.col.max_similarity.alias("sim"),
+                "ranks",
+            )
+        )
+        _rank_cols = {"#1s", "models", "best", "avg", "sim", "ranks"}
+        nn_table = mo.ui.table(
+            _table_df,
+            selection=None,
+            show_download=True,
+            show_column_summaries=False,
+            format_mapping={
+                "avg": "{:.1f}",
+                "sim": "{:.3f}",
+            },
+            text_justify_columns={
+                _c: "right" for _c in ["#1s", "models", "best", "avg", "sim"]
+            },
+            style_cell=lambda _row, _col, _val: (
+                {"font-size": "0.75rem", "padding": "0 4px"}
+                if _col in _rank_cols
+                else {}
+            ),
+            page_size=10,
+            column_widths={
+                "image": 130,
+                "label": 110,
+                "type": 130,
+                "pgpids": 70,
+                "#1s": 35,
+                "ranks": 130,
+                "models": 50,
+                "avg": 35,
+                "best": 40,
+                "sim": 40,
+                "keywords": 130,
+            },
+            wrapped_columns=[
+                "label",
+                "type",
+                "pgpids",
+                "description",
+                "ranks",
+                "keywords",
+            ],
+        )
+    else:
+        nn_table = None
+    # displayed (collapsed) with the similarity search, so it's in fullscreen
+    return (nn_table,)
 
 
 @app.cell
@@ -1717,6 +1989,68 @@ def _(image_meta_df, pgp_meta_df, pl):
     )
     image_info_df = _img.join(_docs, on="shelfmark", how="left")
     return (image_info_df,)
+
+
+@app.cell
+def _(
+    nn_exclude_same_doc,
+    nn_image_df,
+    nn_query_idx,
+    nn_result_doc_types,
+    nn_result_mode,
+    nn_result_tags,
+    nn_result_text,
+    np,
+    pl,
+):
+    # neighbors allowed by the result filters (on top of nn_viewable)
+    _df = nn_image_df
+    _text = nn_result_text.value.strip()
+    _conds = []
+    # document type: any of the image's documents has a selected type
+    if nn_result_doc_types.value:
+        _conds.append(
+            pl.col.doc_types.list.set_intersection(nn_result_doc_types.value).list.len()
+            > 0
+        )
+    # keywords: image's documents share at least one selected PGP tag
+    if nn_result_tags.value:
+        _conds.append(
+            pl.col.tags.list.set_intersection(
+                pl.lit(nn_result_tags.value, dtype=pl.List(pl.String))
+            ).list.len()
+            > 0
+        )
+    # description: case-insensitive substring match on document descriptions
+    if _text:
+        _conds.append(
+            pl.col.description.str.to_lowercase().str.contains(
+                _text.lower(), literal=True
+            )
+        )
+    if _conds:
+        # match any of the active criteria
+        _match = _df.select(pl.any_horizontal(_conds).fill_null(False))
+        _match = _match.to_series().to_numpy()
+        nn_result_allowed = ~_match if nn_result_mode.value == "exclude" else _match
+    else:
+        nn_result_allowed = np.ones(_df.height, dtype=bool)
+    # same document: always excludes images sharing a PGP id with the starting image
+    if nn_exclude_same_doc.value and nn_query_idx is not None:
+        _ids = nn_image_df["pgpids"][nn_query_idx].to_list() or []
+        nn_result_allowed = nn_result_allowed & ~(
+            _df.select(
+                (
+                    pl.col.pgpids.list.set_intersection(
+                        pl.lit(_ids, dtype=nn_image_df.schema["pgpids"])
+                    ).list.len()
+                    > 0
+                ).fill_null(False)
+            )
+            .to_series()
+            .to_numpy()
+        )
+    return (nn_result_allowed,)
 
 
 if __name__ == "__main__":
